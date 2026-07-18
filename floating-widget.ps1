@@ -40,7 +40,8 @@
 #                            arrow keys while the mini widget has focus
 # To move the widget: press and drag anywhere on the content (buttons/inputs excluded) --
 # the page posts a "drag" web message and the host turns it into a native HTCAPTION drag.
-# To close the widget: Alt+F4 (there is no title bar / close button by design).
+# To close the widget: the ✖ button in the hover control bar (bottom-right), or Alt+F4.
+# Launching this script while a widget is already running replaces the old instance.
 
 param(
   [int]$Width = 0,
@@ -86,6 +87,41 @@ public static class DpiAwareness {
 }
 '@
 try { [DpiAwareness]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null } catch { } # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+
+# ---------- 單一實例:接手取代已在跑的浮窗 ----------
+# 沒有這段時,重複啟動會疊出兩個一模一樣的浮窗,而 Ctrl+Alt+W 全域快捷鍵只有最早的
+# 實例註冊得到 -- 使用者點的 👻 是最上層的新實例,快捷鍵卻切到看不見的舊實例,
+# 狀態整組錯亂(2026-07-19 實測)。語意=「重開」:先禮貌 WM_CLOSE,關不掉才強制結束。
+# FindWindow 一定要在 C# 裡呼叫:PowerShell 會把 $null 塞成空字串 "",變成找「類別名
+# 是空字串」的視窗而永遠找不到(實測踩過)。
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WidgetSingleton {
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr FindWindowW(string cls, string title);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  // returns: 0 = no previous instance; -1 = closed gracefully; >0 = pid still alive after waitMs
+  public static long CloseExisting(string title, int waitMs) {
+    IntPtr h = FindWindowW(null, title);
+    if (h == IntPtr.Zero) return 0;
+    uint pid; GetWindowThreadProcessId(h, out pid);
+    PostMessage(h, 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
+    for (int waited = 0; IsWindow(h) && waited < waitMs; waited += 100) System.Threading.Thread.Sleep(100);
+    return IsWindow(h) ? (long)pid : -1;
+  }
+}
+'@
+$prev = [WidgetSingleton]::CloseExisting('AI Usage Dashboard Widget', 4000)
+if ($prev -gt 0) {
+  # 舊實例卡死(例如 v0.5 的 ghost bug 會凍住 UI),WM_CLOSE 沒人理 -- 強制結束它
+  Write-Host "Previous widget instance (pid $prev) not responding -- terminating it." -ForegroundColor Yellow
+  try { Stop-Process -Id $prev -Force -ErrorAction Stop } catch { }
+  Start-Sleep -Milliseconds 300
+} elseif ($prev -eq -1) {
+  Write-Host "Replaced the previous widget instance." -ForegroundColor Yellow
+}
 
 # ---------- 0. Make sure the dashboard server is running (auto-start it if not) ----------
 function Test-DashboardServer {
@@ -166,6 +202,7 @@ $refAssemblies = @(
 
 Add-Type -ReferencedAssemblies $refAssemblies -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -219,6 +256,14 @@ namespace AiDashWidget {
     const int WM_HOTKEY = 0x0312;
     const int HOTKEY_ID = 0xA11;
     bool _ghost;
+    // Windows WE added the bit to (and therefore must clear on un-ghost). Some windows in
+    // the tree are BORN with WS_EX_TRANSPARENT and rely on it for their own input/composition
+    // routing: WPF's HwndHost placeholder ("Static"), Chrome_RenderWidgetHostHWND, and
+    // Chromium's "Intermediate D3D Window". Stripping the bit from those (as a blanket
+    // clear-on-everything did) leaves the WebView2 frozen and invisible until restart --
+    // verified live 2026-07-19: after ghost-off the window stopped painting, dock slide froze,
+    // and only re-ghosting made it show again. Un-ghost must restore exactly what it changed.
+    List<IntPtr> _ghosted = new List<IntPtr>();
     Microsoft.Web.WebView2.Wpf.WebView2 _webView;
 
     public WidgetWindow(string url, string userDataFolder, double left, double top, double width, double height, bool mini) {
@@ -255,6 +300,7 @@ namespace AiDashWidget {
           if (msg == "dock:off") { SetDockMode(false); return; }
           if (msg == "ghost:on") { SetGhost(true); return; }
           if (msg == "ghost:off") { SetGhost(false); return; }
+          if (msg == "close") { try { Close(); } catch { } return; }
           if (msg != "drag") return;
           // Two "drag" presses within 450ms = a double-click on empty content -> toggle dock
           // (owner wanted double-click collapse). Routed back through the page (toggleDock ->
@@ -407,18 +453,29 @@ namespace AiDashWidget {
       _ghost = on;
       var src = PresentationSource.FromVisual(this) as HwndSource;
       if (src == null) return;
-      ApplyClickThrough(src.Handle, on);
-      // Chromium may spawn child HWNDs lazily; styles are (re)applied on every toggle, which in
-      // practice covers them all -- the browser child windows exist well before first toggle.
-      EnumChildWindows(src.Handle, (h, l) => { ApplyClickThrough(h, on); return true; }, IntPtr.Zero);
+      if (on) {
+        // Chromium may spawn child HWNDs lazily; in practice the browser child windows all
+        // exist well before the first toggle.
+        _ghosted.Clear();
+        AddClickThrough(src.Handle);
+        EnumChildWindows(src.Handle, (h, l) => { AddClickThrough(h); return true; }, IntPtr.Zero);
+      } else {
+        foreach (IntPtr h in _ghosted) {
+          int ex = GetWindowLong(h, GWL_EXSTYLE);
+          SetWindowLong(h, GWL_EXSTYLE, ex & ~WS_EX_TRANSPARENT);
+        }
+        _ghosted.Clear();
+      }
       if (_webView != null && _webView.CoreWebView2 != null) {
         try { _webView.CoreWebView2.PostWebMessageAsString(on ? "ghostState:on" : "ghostState:off"); } catch { }
       }
     }
 
-    void ApplyClickThrough(IntPtr hwnd, bool on) {
+    void AddClickThrough(IntPtr hwnd) {
       int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
-      SetWindowLong(hwnd, GWL_EXSTYLE, on ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT));
+      if ((ex & WS_EX_TRANSPARENT) != 0) return; // born with the bit -- not ours to manage
+      SetWindowLong(hwnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT);
+      _ghosted.Add(hwnd);
     }
 
     void SetDockMode(bool on) {

@@ -266,10 +266,14 @@ async function fetchClaude() {
   return { ok: true, session, longterm, longtermLabel: '每週', extra };
 }
 
-// ---------- 撞牆預警:任一條 Claude 用量 ≥90% 時發桌面系統通知 ----------
-// 每條 bar 每個重置週期只通知一次(以 resets_at 當週期識別;重置後 resets_at 變了才會再叫)。
-const ALERT_PCT = 90;
-const alertedAt = {}; // barKey → 該次通知時的 resets_at
+// ---------- 撞牆預警:任一條 Claude 用量到 90% / 95% 時各發一次桌面系統通知 ----------
+// ⚠️ 不能拿 resets_at 當「同週期只叫一次」的鑰匙:上游每次請求都重新生成該欄位
+// (實測連微秒尾碼都在變),≥90% 時每輪詢(60s)都判定成「新週期」而重發 toast,
+// 使用者被轟炸(2026-07-19 回報)。改成追蹤「這條 bar 已通知到哪個門檻」:
+// 90 和 95 各叫一次,用量掉回 85 以下(視窗重置了)才歸零、下個視窗重新警戒。
+const ALERT_STEPS = [90, 95];
+const ALERT_RESET_BELOW = 85;
+const alertedStep = {}; // barKey → 已通知的最高門檻
 function sysNotify(title, body) {
   try {
     if (process.platform === 'win32') {
@@ -302,11 +306,16 @@ function checkClaudeAlerts(r) {
   if (r.longterm) bars.push(['weekly', 'Weekly', r.longterm]);
   for (const e of r.extra || []) bars.push(['extra:' + e.label, e.label + ' 每週', e]);
   for (const [key, label, b] of bars) {
-    if (b.usedPct == null || b.usedPct < ALERT_PCT) continue;
-    const winKey = b.resetsAt || 'na';
-    if (alertedAt[key] === winKey) continue;
-    alertedAt[key] = winKey;
-    sysNotify('Claude 用量警報', `⚠️ ${label} ${b.usedPct}% — 建議開始收尾`);
+    if (b.usedPct == null) continue;
+    if (b.usedPct < ALERT_RESET_BELOW) { delete alertedStep[key]; continue; }
+    let step = null;
+    for (const s of ALERT_STEPS) if (b.usedPct >= s) step = s;
+    if (step == null || (alertedStep[key] || 0) >= step) continue;
+    alertedStep[key] = step;
+    console.log(`[alert] ${key} ${b.usedPct}% -> notify step ${step}`);
+    sysNotify('Claude 用量警報', step >= 95
+      ? `🚨 ${label} ${b.usedPct}% — 快撞牆了,盡快收尾`
+      : `⚠️ ${label} ${b.usedPct}% — 建議開始收尾`);
   }
 }
 

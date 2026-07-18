@@ -3,7 +3,33 @@
 > 給下一個 session（或另一個帳號的 Claude）接手用的狀態快照。
 > 讀完這份＋README 就能繼續，不用重新考古。
 
-## 目前版本:wool-v0.5(2026-07-19)
+## 目前版本:wool-v0.6(2026-07-19)
+
+### v0.6 內容
+
+- **👻 穿透關不掉的 bug(主人回報:Ctrl+Alt+W 關閉後整個浮窗消失/凍住,必須重開)**:
+  根因是 WebView2 樹裡有幾個視窗**原生就帶 `WS_EX_TRANSPARENT`**(WPF 的 HwndHost
+  「Static」、`Chrome_RenderWidgetHostHWND`、`Intermediate D3D Window`——後兩者屬於
+  msedgewebview2.exe,不是我們的程序),v0.5 的 SetGhost(off) 對「所有」子視窗一律
+  清 bit,把人家原生的也剝掉 → 實測(styles dump + 截圖)浮窗停止渲染、位置凍住、
+  收納失靈,再按快捷鍵(ghost:on 把 bit 塞回去)才會重新出現但點不到。
+  修法:ghost:on 只對「本來沒有這個 bit」的視窗加 bit 並記進 `_ghosted` 清單,
+  ghost:off 只還原清單裡的——原生 bit 永不碰,開關往返 = 真正的 no-op。
+- **單一實例防護**:重複啟動 floating-widget 會疊出兩個浮窗,且 RegisterHotKey
+  同鍵只有最早的實例搶得到,Ctrl+Alt+W 會切到「看不見的舊實例」──株連前一條 bug
+  一起發作時症狀更詭異。現在 ps1 啟動時先 FindWindow 舊浮窗:WM_CLOSE 禮貌接手,
+  4 秒沒反應(舊實例凍死)就強制結束。⚠️ FindWindow 必須包在 C# 裡呼叫,
+  PowerShell 會把 $null 塞成空字串害它永遠找不到(踩過)。
+- **✖ 關閉浮窗按鈕**(主人許願):控制列新增 ✖,頁面 post `close` → 宿主 Close()
+  (等同 Alt+F4)。伺服器照跑;瀏覽器開 ?widget=1 時按了是 no-op(預期)。
+- **90% 通知轟炸修正**(主人回報:到 90% 後 toast 反覆跳,關掉 Claude Code 也在跳):
+  toast 其實是本專案 node 伺服器發的(借 PowerShell 的 AppId,通知來源顯示
+  PowerShell),跟 Claude Code 無關。反覆跳的根因:上游 `oauth/usage` **每次請求
+  都重新生成 resets_at(連微秒尾碼都在變)**,拿它當「同週期只叫一次」的 key
+  每輪詢都變新週期。改成門檻階梯:90%/95% 各通知一次(95 文案更急),
+  用量掉回 85 以下(視窗重置)才重新警戒。不再依賴 resets_at。
+
+## 前一版:wool-v0.5(2026-07-19)
 
 ### v0.5 內容
 
