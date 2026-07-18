@@ -1,0 +1,9 @@
+# 本機狀態/機密:設定(含個人日期/額度)、掃描快取(含本機專案路徑)、伺服器日誌
+config.json
+wool-cache.json
+server.log
+
+# WebView2 SDK DLL:不隨版控發佈,照 README 從 nuget.org 抓
+floating-widget-lib/
+
+node_modules/
