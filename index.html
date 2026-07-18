@@ -209,7 +209,7 @@
   /* 浮窗只看 Claude 就好(2026-07-19 主人裁決),其他提供商連摺疊列都不顯示;瀏覽器完整版仍看得到 */
   .widget-mode .minor { display: none; }
   .mini-mode .wool { display: none; }
-  .widget-mode .wool { background: linear-gradient(180deg, rgba(22,34,60,.55), rgba(18,27,48,.55)); }
+  .widget-mode .wool { background: linear-gradient(180deg, rgba(22,34,60,var(--ca,.55)), rgba(18,27,48,var(--ca,.55))); }
 
   /* ---------- RWD ---------- */
   @media (max-width: 1100px) {
@@ -226,6 +226,7 @@
     background: var(--panel); color: var(--text);
     border: 1px solid var(--panel-edge); border-radius: 14px;
     padding: 22px; width: min(480px, 92vw);
+    margin: auto; /* 上面的 * reset 會吃掉 UA 的 margin:auto,不補回來 dialog 會貼在左上角 */
   }
   dialog::backdrop { background: rgba(3,7,18,.7); }
   dialog h2 { font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; }
@@ -262,14 +263,66 @@
   /* 只留供應商卡片本身,拿掉標題/狀態/語系/新增按鈕;背景與卡片底色都改半透明,讓桌面透出來 */
   .widget-mode body { background: transparent; padding: 8px; }
   .widget-mode header { display: none; }
-  .widget-mode .row { background: linear-gradient(180deg, rgba(22,34,60,.55), rgba(18,27,48,.55)); }
-  /* 血條本身也改半透明(軌道 + 三種血量填色 + 倒數條的填色) */
+  /* 卡片背景透明度分「平常/滑鼠移入」兩段(--card-alpha / --card-alpha-hover,皆由滑桿寫入
+     inline 自訂屬性);hover 值沒設定時退回平常值。實際取用走中介變數 --ca。 */
+  html.widget-mode { --ca: var(--card-alpha, .55); }
+  html.widget-mode:hover { --ca: var(--card-alpha-hover, var(--card-alpha, .55)); }
+  .widget-mode .row { background: linear-gradient(180deg, rgba(22,34,60,var(--ca,.55)), rgba(18,27,48,var(--ca,.55))); }
+  /* 浮窗控制列:透明度滑桿＋收納鈕,平常隱形,滑鼠移入浮窗才浮現(同 #dragHint 的邏輯) */
+  #widgetCtrl { display: none; }
+  html.widget-mode:not(.mini-mode) #widgetCtrl {
+    display: flex; position: fixed; right: 10px; bottom: 10px; z-index: 60;
+    gap: 6px; align-items: center; padding: 4px 8px; border-radius: 8px;
+    background: rgba(10,16,32,.8); border: 1px solid rgba(255,255,255,.12);
+    opacity: 0; transition: opacity .25s;
+  }
+  html.widget-mode:hover #widgetCtrl { opacity: 1; }
+  #widgetCtrl input[type=range] { width: 56px; height: 14px; accent-color: #7dd3fc; cursor: pointer; }
+  #widgetCtrl button.on { background: rgba(125,211,252,.3); color: #fff; border-color: rgba(125,211,252,.6); }
+  #widgetCtrl button {
+    background: none; border: 1px solid rgba(255,255,255,.2); border-radius: 6px;
+    color: var(--muted); font-size: 12px; line-height: 1; padding: 3px 6px;
+  }
+  #widgetCtrl button:hover { color: var(--fg); border-color: rgba(255,255,255,.4); }
+  /* 血條軌道(空的部分)維持半透明;填色不再壓 alpha —— 主人 2026-07-19 定案:
+     亮度比照薅羊毛金條(不透明),直接沿用一般模式的全亮漸層(含倒數條)。 */
   .widget-mode .bar { background: rgba(8,13,26,.18); }
-  .widget-mode .fill.g { background: linear-gradient(180deg, rgba(74,222,128,.22), rgba(21,128,61,.22)); }
-  .widget-mode .fill.y { background: linear-gradient(180deg, rgba(253,224,71,.22), rgba(161,98,7,.22)); }
-  .widget-mode .fill.o { background: linear-gradient(180deg, rgba(251,146,60,.22), rgba(194,65,12,.22)); }
-  .widget-mode .fill.r { background: linear-gradient(180deg, rgba(248,113,113,.22), rgba(185,28,28,.22)); }
-  .widget-mode .bar.cd .fill { background: linear-gradient(180deg, rgba(125,211,252,.22), rgba(3,105,161,.22)); }
+  /* 主人指定:標籤(目前使用率…)與副標(已用 x%)改用跟血條「剩 %」一樣的白字,方便閱讀;
+     薅羊毛區的文字也一併調亮 */
+  .widget-mode .metric-label, .widget-mode .sub,
+  .widget-mode .ctx-line, .widget-mode details.ctx-more,
+  .widget-mode .wool summary, .widget-mode .wool-brief, .widget-mode .wool-stats,
+  .widget-mode .wool-note, .widget-mode .wool-form {
+    color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.9);
+  }
+  /* widget 只有 Claude 一張卡,▲▼ 排序鍵沒意義(窄寬度觸發 RWD 才顯示出來的),藏掉 */
+  .widget-mode .move-btns { display: none; }
+  /* 緊湊版面:字級維持整數 px(125% DPI 下 CSS zoom 的非整數字級會發糊,主人反應過),
+     只縮 padding/間距/血條高度,約等於原尺寸 88% 的密度。-Scale ≠1 時 zoom 仍會疊加。 */
+  .widget-mode body { padding: 6px; }
+  .widget-mode #rows { gap: 10px; }
+  .widget-mode .row { padding: 10px 12px; gap: 8px; border-radius: 12px; }
+  .widget-mode .prov { gap: 4px; }
+  .widget-mode .prov-name { font-size: 15px; }
+  .widget-mode .metrics { gap: 8px; }
+  .widget-mode .bar { height: 20px; }
+  .widget-mode .bar.mini { height: 9px; }
+  .widget-mode .metric-label { margin-bottom: 3px; }
+  .widget-mode .sub { margin-top: 3px; }
+  .widget-mode .wool { margin-top: 10px; padding: 8px 12px 10px; border-radius: 12px; }
+  .widget-mode .wool-body { margin-top: 8px; gap: 8px; }
+
+  /* ---------- 瀏覽器完整版字體(主人 2026-07-19:比照 widget 放大調亮;widget 尺寸已調好不動) ---------- */
+  html:not(.widget-mode) .metric-label { font-size: 13px; color: var(--text); }
+  html:not(.widget-mode) .src { font-size: 11px; }
+  html:not(.widget-mode) .sub { font-size: 12px; color: var(--text); }
+  html:not(.widget-mode) .bar-text { font-size: 13px; }
+  html:not(.widget-mode) .ctx-line, html:not(.widget-mode) details.ctx-more { font-size: 12px; color: var(--text); }
+  html:not(.widget-mode) .prov-meta { font-size: 12px; color: var(--text); }
+  html:not(.widget-mode) .wool-brief { font-size: 13px; color: var(--text); }
+  html:not(.widget-mode) .wool-stats { font-size: 14px; }
+  html:not(.widget-mode) .wool-note { font-size: 12px; color: #b6c5e0; }
+  html:not(.widget-mode) .wool-form { font-size: 13px; color: var(--text); }
   /* 捲軸也改透明:隱藏上下箭頭圖示,軌道透明,滑塊改半透明白 */
   .widget-mode ::-webkit-scrollbar { width: 8px; }
   .widget-mode ::-webkit-scrollbar-track { background: transparent; }
@@ -323,6 +376,22 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
   if (new URLSearchParams(location.search).get('mini') === '1') {
     document.documentElement.classList.add('mini-mode');
   }
+  // 縮放(floating-widget.ps1 -Scale 帶進來的 &scale=):只 zoom 內容區塊(#rows/#woolBox),
+  // 不 zoom 整個 root —— zoom 掛在 root 上會把 top-layer 的 <dialog> 置中算壞(被擠到左邊 2/3),
+  // 區塊級 zoom 則完全不影響 dialog。宿主的自量測高度量的是 zoom 後的 rect,不用另外換算。
+  const zsc = parseFloat(new URLSearchParams(location.search).get('scale'));
+  if (zsc > 0 && zsc !== 1) {
+    const st = document.createElement('style');
+    st.textContent = `#rows, #woolBox { zoom: ${zsc}; }`;
+    document.head.appendChild(st);
+  }
+  // 卡片背景透明度(平常/滑鼠移入兩段):提早套用避免載入閃一下預設值;滑桿在 initWidgetCtrl() 綁定
+  try {
+    const alpha = parseFloat(localStorage.getItem('woolWidgetAlpha'));
+    if (alpha >= 0.05 && alpha <= 1) document.documentElement.style.setProperty('--card-alpha', alpha);
+    const alphaH = parseFloat(localStorage.getItem('woolWidgetAlphaHover'));
+    if (alphaH >= 0.05 && alphaH <= 1) document.documentElement.style.setProperty('--card-alpha-hover', alphaH);
+  } catch {}
   // WebView2/WKWebView 是獨立的原生子視窗,會吞掉自己範圍內所有滑鼠事件,原生宿主只剩幾 px
   // 的隱形邊框能拖,很難抓。改成由頁面發起:在非互動區按下左鍵時 postMessage('drag') 通知宿主
   // (Windows: floating-widget.ps1/AiDashWidget 收到後轉送 WM_NCLBUTTONDOWN+HTCAPTION 由原生
@@ -350,7 +419,7 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
 <header>
   <h1><span data-i18n="pageTitle">AI 使用量儀表板</span> <span class="pix">▮▮▮▯▯</span></h1>
   <span id="status"><span class="dot" id="statusDot"></span><span id="statusText" data-i18n="statusConnecting">連線中…</span></span>
-  <span id="verTag">wool-v0.4</span>
+  <span id="verTag">wool-v0.5</span>
   <span class="spacer"></span>
   <button id="langToggle" type="button"></button>
   <button id="addBtn" class="primary" data-i18n="addProviderBtn">＋ 新增提供商</button>
@@ -358,12 +427,20 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
 
 <main id="rows"></main>
 
-<details id="woolBox" class="wool">
-  <summary><span class="wool-title">🐑 <span data-i18n="woolTitle">Fable 薅羊毛進度</span></span><span id="woolBrief" class="wool-brief"></span></summary>
+<details id="woolBox" class="wool" open>
+  <summary><span class="wool-title">🐑 <span data-i18n="woolTitle">薅羊毛進度</span></span><span id="woolBrief" class="wool-brief"></span></summary>
   <div id="woolBody" class="wool-body"></div>
 </details>
 <div id="miniLine"></div>
 <div id="dragHint">⠿⠿⠿</div>
+<div id="widgetCtrl">
+  <span id="alphaIcon" style="font-size:11px">◐</span>
+  <input id="alphaSlider" type="range" min="10" max="100" step="5">
+  <span id="alphaHoverIcon" style="font-size:11px">🖱</span>
+  <input id="alphaHoverSlider" type="range" min="10" max="100" step="5">
+  <button id="ghostBtn" type="button">👻</button>
+  <button id="dockBtn" type="button">⏴</button>
+</div>
 
 <div id="toast"></div>
 
@@ -464,6 +541,14 @@ const I18N = {
     respawnOfLabel: '{label}重生',
     naText: '無法讀取',
     naSub: '無活躍 session 或不支援',
+    notStartedText: '未啟動',
+    notStartedSub: '發訊息後起算',
+    alphaSliderTitle: '平常的卡片背景透明度',
+    alphaHoverTitle: '滑鼠移入時的卡片背景透明度',
+    ghostOffTitle: '開啟滑鼠穿透(點擊會穿過浮窗到下層;開啟後浮窗點不到,用 Ctrl+Alt+W 切回)',
+    ghostOnTitle: '滑鼠穿透中——按 Ctrl+Alt+W 關閉',
+    dockOnTitle: '收納到螢幕右緣(滑鼠靠右緣展開)',
+    dockOffTitle: '取消收納,固定展開',
     activeSessionsCount: '{label} · 共 {n} 個活躍 session',
     activeSessionUsed: '{label} · 已用 {pct}%',
     readyText: '✦ 已重生 ✦',
@@ -494,10 +579,10 @@ const I18N = {
     langToggleTitle: 'Switch to English',
     extraWeeklyUsage: '{label} 每週使用率',
     extraWeeklyRespawn: '{label} 每週重生',
-    woolTitle: 'Fable 薅羊毛進度',
-    woolBurned: '已燒 ${used} / ${budget}',
-    woolRemain: '剩 ${remain}',
-    woolRate: '近 7 日 ≈ ${rate}/天',
+    woolTitle: '薅羊毛進度',
+    woolBurned: '已燒 {used} / {budget}',
+    woolRemain: '剩 {remain}',
+    woolRate: '近 7 日 ≈ {rate}/天',
     woolEta: '照此速度約 {days} 天後榨乾({date})',
     woolNoRate: '近 7 日沒有 Fable 用量,無法估速度',
     woolFitYes: '😌 到期({date})前燒得完',
@@ -508,7 +593,8 @@ const I18N = {
     woolOffline: '無法連線本機伺服器',
     woolMsgs: '{n} 則 Fable 訊息 · 首筆 {date}',
     woolDisclaimer: '🐑 佛系粗估:只算本機 Claude Code log(多帳號混計),不含 claude.ai 網頁端。定價 input $10 / output $50 / cache 讀 $1 / cache 寫 $12.5〜$20(每百萬 tokens)。',
-    woolBudgetLabel: '額度 $',
+    woolBudgetLabel: '額度 US$',
+    woolTwdRateLabel: '匯率 US$→NT$',
     woolStartLabel: '起算日',
     woolExpiryLabel: '到期日',
     woolSaveBtn: '儲存',
@@ -558,6 +644,14 @@ const I18N = {
     respawnOfLabel: '{label} Respawn',
     naText: 'N/A',
     naSub: 'No active session or unsupported',
+    notStartedText: 'Not started',
+    notStartedSub: 'Starts when a message is sent',
+    alphaSliderTitle: 'Card background opacity (idle)',
+    alphaHoverTitle: 'Card background opacity (hovered)',
+    ghostOffTitle: 'Enable click-through (clicks pass to windows below; press Ctrl+Alt+W to disable)',
+    ghostOnTitle: 'Click-through active — press Ctrl+Alt+W to disable',
+    dockOnTitle: 'Dock to right screen edge (hover edge to expand)',
+    dockOffTitle: 'Undock (stay expanded)',
     activeSessionsCount: '{label} · {n} active sessions',
     activeSessionUsed: '{label} · {pct}% used',
     readyText: '✦ Ready ✦',
@@ -588,10 +682,10 @@ const I18N = {
     langToggleTitle: '切換為繁體中文',
     extraWeeklyUsage: '{label} Weekly Usage',
     extraWeeklyRespawn: '{label} Weekly Respawn',
-    woolTitle: 'Fable Wool-Milking Progress',
-    woolBurned: '${used} / ${budget} burned',
-    woolRemain: '${remain} left',
-    woolRate: 'Last 7 days ≈ ${rate}/day',
+    woolTitle: 'Wool-Milking Progress',
+    woolBurned: '{used} / {budget} burned',
+    woolRemain: '{remain} left',
+    woolRate: 'Last 7 days ≈ {rate}/day',
     woolEta: 'At this rate, dry in {days} days ({date})',
     woolNoRate: 'No Fable usage in the last 7 days — cannot estimate rate',
     woolFitYes: '😌 Will burn out before expiry ({date})',
@@ -602,7 +696,8 @@ const I18N = {
     woolOffline: 'Cannot reach the local server',
     woolMsgs: '{n} Fable messages · first on {date}',
     woolDisclaimer: '🐑 Rough estimate: local Claude Code logs only (all accounts mixed), excludes claude.ai web usage. Pricing: input $10 / output $50 / cache read $1 / cache write $12.5–$20 (per 1M tokens).',
-    woolBudgetLabel: 'Budget $',
+    woolBudgetLabel: 'Budget US$',
+    woolTwdRateLabel: 'Rate US$→NT$',
     woolStartLabel: 'Start date',
     woolExpiryLabel: 'Expiry date',
     woolSaveBtn: 'Save',
@@ -738,6 +833,7 @@ function effective(p) {
     if (auto.session.usedPct != null) { sess.usedPct = auto.session.usedPct; sess.src = 'auto'; }
     if (auto.session.resetsAt) { const t = Date.parse(auto.session.resetsAt); if (!isNaN(t)) sess.resetsAt = t; }
     if (auto.session.windowMinutes) sess.windowMin = auto.session.windowMinutes;
+    if (auto.session.isActive === false) sess.inactive = true; // 視窗未啟動,resets_at 是漂移佔位值
   }
   if (auto && auto.longterm === null) {
     lt.usedPct = null; lt.resetsAt = null; lt.src = 'auto';
@@ -745,6 +841,7 @@ function effective(p) {
     if (auto.longterm.usedPct != null) { lt.usedPct = auto.longterm.usedPct; lt.src = 'auto'; }
     if (auto.longterm.resetsAt) { const t = Date.parse(auto.longterm.resetsAt); if (!isNaN(t)) lt.resetsAt = t; }
     if (auto.longterm.windowMinutes) lt.windowMin = auto.longterm.windowMinutes;
+    if (auto.longterm.isActive === false) lt.inactive = true;
     if (auto.longtermLabel) lt.label = auto.longtermLabel;
   }
   // 附加條(如 Fable 每週):上游 limits[] 回報的模型別配額,純自動、無手動保底,消失就不顯示
@@ -757,6 +854,7 @@ function effective(p) {
         label: String(x.label || ''), usedPct: x.usedPct,
         resetsAt: isNaN(ts) ? null : ts,
         windowMin: x.windowMinutes || null,
+        inactive: x.isActive === false,
       });
     }
   }
@@ -856,7 +954,17 @@ function ctxCell(ctx) {
     </div>`;
 }
 
-function cdCell(label, resetsAt, windowMin, src, pid, kind) {
+function cdCell(label, resetsAt, windowMin, src, pid, kind, inactive) {
+  // 視窗未啟動(is_active=false):上游的 resets_at 是隨輪詢漂移的佔位值,
+  // 渲染成倒數會跟 claude.ai 對不起來,改顯示「發訊息後起算」(與官網文案一致)
+  if (inactive) {
+    return `
+    <div class="metric">
+      <div class="metric-label"><span>${label}</span><span class="src">${srcLabel(src)}</span></div>
+      <div class="bar na"><span class="bar-text na-text">${t('notStartedText')}</span></div>
+      <div class="sub">${t('notStartedSub')}</div>
+    </div>`;
+  }
   const has = resetsAt != null && isFinite(resetsAt);
   // 同 hpCell:自動同步但上游明確表示無此資料時,顯示灰色虛框,不掛 data-cd(不需要倒數)
   if (!has && src === 'auto') {
@@ -917,11 +1025,13 @@ function renderMini() {
       <div class="fill ${hpClass(used)}" style="width:${has ? remain : 0}%"></div>
       <span class="bar-text">${has ? t('remainPct', { pct: remain.toFixed(0) }) : '—'}</span>
     </div>
-    <div class="bar cd" data-cd data-pid="${p.id}" data-kind="session"
+    ${e.sess.inactive
+      ? `<div class="bar cd"><span class="bar-text">${t('notStartedText')}</span></div>`
+      : `<div class="bar cd" data-cd data-pid="${p.id}" data-kind="session"
          data-resets="${e.sess.resetsAt || ''}" data-window="${e.sess.windowMin || ''}">
       <div class="fill" style="width:0%"></div>
       <span class="bar-text">—</span>
-    </div>`;
+    </div>`}`;
   tick();
 }
 
@@ -954,15 +1064,15 @@ function renderAll() {
       </div>
       <div class="metrics">
         ${hpCell(t('labelCurrentUsage'), e.sess.usedPct, e.sess.src)}
-        ${cdCell(t('labelNextRespawn'), e.sess.resetsAt, e.sess.windowMin, e.sess.src, p.id, 'session')}
+        ${cdCell(t('labelNextRespawn'), e.sess.resetsAt, e.sess.windowMin, e.sess.src, p.id, 'session', e.sess.inactive)}
         ${ctxCell(e.ctx)}
         ${hpCell(t('usageOfLabel', { label: ltLabelText(e.lt.label) }), e.lt.usedPct, e.lt.src)}
-        ${cdCell(t('respawnOfLabel', { label: ltLabelText(e.lt.label) }), e.lt.resetsAt, e.lt.windowMin, e.lt.src, p.id, 'longterm')}
+        ${cdCell(t('respawnOfLabel', { label: ltLabelText(e.lt.label) }), e.lt.resetsAt, e.lt.windowMin, e.lt.src, p.id, 'longterm', e.lt.inactive)}
         ${e.extra.map((x, i) => {
           const lbl = escapeHtml(x.label);
           const weekly = x.windowMin === 10080;
           return hpCell(weekly ? t('extraWeeklyUsage', { label: lbl }) : t('usageOfLabel', { label: lbl }), x.usedPct, 'auto')
-               + cdCell(weekly ? t('extraWeeklyRespawn', { label: lbl }) : t('respawnOfLabel', { label: lbl }), x.resetsAt, x.windowMin, 'auto', p.id, 'extra' + i);
+               + cdCell(weekly ? t('extraWeeklyRespawn', { label: lbl }) : t('respawnOfLabel', { label: lbl }), x.resetsAt, x.windowMin, 'auto', p.id, 'extra' + i, x.inactive);
         }).join('')}
       </div>
     </section>`;
@@ -1142,7 +1252,12 @@ async function fetchWool() {
   clearTimeout(woolTimer);
   woolTimer = setTimeout(fetchWool, (woolData && woolData.scanning) ? 8000 : 300000);
 }
-const fmtUsd2 = v => (v != null && isFinite(v)) ? v.toFixed(2) : '—';
+// 2026-07-19 主人指定:金額一律轉台幣顯示(匯率可在表單調,内部計價仍是 USD)
+function fmtTwd(v, rate) {
+  if (v == null || !isFinite(v)) return '—';
+  const nt = v * rate;
+  return 'NT$' + (nt >= 100 ? Math.round(nt).toLocaleString() : (Math.round(nt * 10) / 10));
+}
 function renderWool() {
   const box = $('#woolBox');
   if (!box || isMiniMode) return;
@@ -1153,16 +1268,18 @@ function renderWool() {
     return;
   }
   const w = woolData;
-  brief.textContent = t('woolBurned', { used: fmtUsd2(w.totalUsd), budget: w.budgetUsd })
+  const rate = (w.twdRate > 0) ? w.twdRate : 30;
+  const $nt = v => fmtTwd(v, rate);
+  brief.textContent = t('woolBurned', { used: $nt(w.totalUsd), budget: $nt(w.budgetUsd) })
     + (w.scanning ? ' · ' + t('woolScanning') : '');
   // 使用者正在表單裡打字時不要整塊重畫(輪詢會把輸入洗掉)
   if (body.contains(document.activeElement) && document.activeElement !== body) return;
   const pct = w.budgetUsd > 0 ? Math.min(100, w.totalUsd / w.budgetUsd * 100) : 0;
   const stats = [];
-  stats.push(`<span>${t('woolBurned', { used: fmtUsd2(w.totalUsd), budget: w.budgetUsd })}</span>`);
-  stats.push(`<span>${t('woolRemain', { remain: fmtUsd2(w.remainingUsd) })}</span>`);
+  stats.push(`<span>${t('woolBurned', { used: $nt(w.totalUsd), budget: $nt(w.budgetUsd) })}</span>`);
+  stats.push(`<span>${t('woolRemain', { remain: $nt(w.remainingUsd) })}</span>`);
   if (w.perDayUsd > 0) {
-    stats.push(`<span>${t('woolRate', { rate: fmtUsd2(w.perDayUsd) })}</span>`);
+    stats.push(`<span>${t('woolRate', { rate: $nt(w.perDayUsd) })}</span>`);
     if (w.daysLeft != null && w.remainingUsd > 0) stats.push(`<span>${t('woolEta', { days: w.daysLeft, date: w.depleteDate || '—' })}</span>`);
   } else {
     stats.push(`<span>${t('woolNoRate')}</span>`);
@@ -1182,6 +1299,7 @@ function renderWool() {
     <div class="wool-stats">${stats.join('')}</div>
     <div class="wool-form">
       <label>${t('woolBudgetLabel')}<input id="wBudget" type="number" min="0.5" step="0.5" value="${w.budgetUsd}"></label>
+      <label>${t('woolTwdRateLabel')}<input id="wTwd" type="number" min="1" step="0.1" value="${rate}"></label>
       <label>${t('woolStartLabel')}<input id="wStart" type="date" value="${w.startDate || ''}"></label>
       <label>${t('woolExpiryLabel')}<input id="wExpiry" type="date" value="${w.expiryDate || ''}"></label>
       <button type="button" id="wSave">${t('woolSaveBtn')}</button>
@@ -1196,6 +1314,7 @@ async function saveWoolConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         budgetUsd: $('#wBudget').value,
+        twdRate: $('#wTwd').value,
         startDate: $('#wStart').value || null,
         expiryDate: $('#wExpiry').value || null,
       }),
@@ -1346,6 +1465,77 @@ $('#addBtn').addEventListener('click', () => {
   addDlg.showModal();
 });
 $('#addCancel').addEventListener('click', () => addDlg.close());
+
+// ---------------- 浮窗控制列:透明度滑桿＋右側收納(見 floating-widget.ps1) ----------------
+(function initWidgetCtrl() {
+  if (!document.documentElement.classList.contains('widget-mode') || isMiniMode) return;
+  const slider = $('#alphaSlider'), hoverSlider = $('#alphaHoverSlider'),
+        ghostBtn = $('#ghostBtn'), dockBtn = $('#dockBtn');
+  if (!slider || !dockBtn) return;
+  const ALPHA_KEY = 'woolWidgetAlpha', ALPHA_HOVER_KEY = 'woolWidgetAlphaHover',
+        GHOST_KEY = 'woolWidgetGhost', DOCK_KEY = 'woolWidgetDock';
+  let alpha = parseFloat(localStorage.getItem(ALPHA_KEY));
+  if (!(alpha >= 0.1 && alpha <= 1)) alpha = 0.55;
+  slider.value = Math.round(alpha * 100);
+  slider.title = t('alphaSliderTitle');
+  slider.addEventListener('input', () => {
+    const v = slider.value / 100;
+    document.documentElement.style.setProperty('--card-alpha', v);
+    localStorage.setItem(ALPHA_KEY, String(v));
+  });
+  // 滑鼠移入時的透明度:沒調整過就跟隨平常值(CSS var 鏈退回)
+  let alphaH = parseFloat(localStorage.getItem(ALPHA_HOVER_KEY));
+  hoverSlider.value = Math.round(((alphaH >= 0.1 && alphaH <= 1) ? alphaH : alpha) * 100);
+  hoverSlider.title = t('alphaHoverTitle');
+  hoverSlider.addEventListener('input', () => {
+    const v = hoverSlider.value / 100;
+    document.documentElement.style.setProperty('--card-alpha-hover', v);
+    localStorage.setItem(ALPHA_HOVER_KEY, String(v));
+  });
+  // 收納模式:狀態存 localStorage,並 postMessage 通知原生宿主移動視窗。
+  // 一般瀏覽器開 ?widget=1 沒有 chrome.webview,按鈕只切狀態、不會有視窗動作。
+  const post = (m) => { if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(m); };
+  let docked = localStorage.getItem(DOCK_KEY) === '1';
+  const paint = () => {
+    dockBtn.textContent = docked ? '📌' : '⏴';
+    dockBtn.title = docked ? t('dockOffTitle') : t('dockOnTitle');
+  };
+  dockBtn.addEventListener('click', () => {
+    docked = !docked;
+    localStorage.setItem(DOCK_KEY, docked ? '1' : '0');
+    post(docked ? 'dock:on' : 'dock:off');
+    paint();
+  });
+  paint();
+  if (docked) post('dock:on'); // 上次收納狀態跨啟動還原
+  // 👻 滑鼠穿透:開啟後整個浮窗對滑鼠隱形(點擊直達下層視窗),浮窗本身就點不到了,
+  // 關閉只能靠宿主註冊的全域快捷鍵 Ctrl+Alt+W。狀態雙向同步:按鈕→ghost:on/off 給宿主;
+  // 快捷鍵切換→宿主回傳 ghostState:on/off,這裡只更新狀態不再回發。
+  let ghost = localStorage.getItem(GHOST_KEY) === '1';
+  const paintGhost = () => {
+    ghostBtn.classList.toggle('on', ghost);
+    ghostBtn.title = ghost ? t('ghostOnTitle') : t('ghostOffTitle');
+  };
+  ghostBtn.addEventListener('click', () => {
+    ghost = !ghost;
+    localStorage.setItem(GHOST_KEY, ghost ? '1' : '0');
+    post(ghost ? 'ghost:on' : 'ghost:off');
+    paintGhost();
+  });
+  paintGhost();
+  if (ghost) post('ghost:on'); // 上次穿透狀態跨啟動還原(Ctrl+Alt+W 隨時可關)
+  // 宿主回傳:空白處雙擊(兩次 drag <450ms)→ toggleDock;Ctrl+Alt+W → ghostState:on/off
+  if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
+    window.chrome.webview.addEventListener('message', (e) => {
+      if (e.data === 'toggleDock') dockBtn.click();
+      else if (e.data === 'ghostState:on' || e.data === 'ghostState:off') {
+        ghost = e.data.endsWith(':on');
+        localStorage.setItem(GHOST_KEY, ghost ? '1' : '0');
+        paintGhost();
+      }
+    });
+  }
+})();
 
 // ---------------- 啟動 ----------------
 applyStaticI18n();

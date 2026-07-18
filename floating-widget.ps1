@@ -26,6 +26,12 @@
 # install it via winget. Missing WebView2 SDK DLLs are offered the same way (ensure-webview2.ps1).
 # Optional parameters:
 #   -Width 380 -Height 480   window size (default fits one provider card; resize as needed)
+#   -Scale 1                 extra shrink via CSS zoom (window + page zoom together). Default 1:
+#                            the widget page already uses a compact stylesheet (~88% density)
+#                            with UNSCALED integer font sizes, because fractional zoomed text
+#                            renders fuzzy at 125% DPI (owner complained). Pass e.g. -Scale 0.85
+#                            only if you want it even smaller and accept slightly softer text.
+#                            Ignored in -Mini mode (already a single 20px line).
 #   -Margin 16               margin from the screen edge, in pixels
 #   -Mini                    single-line ~20px-tall bar instead of a full card; fixed size,
 #                            no corner resize handles
@@ -39,6 +45,7 @@
 param(
   [int]$Width = 0,
   [int]$Height = 0,
+  [double]$Scale = 1.0,
   [int]$Margin = 16,
   [switch]$Mini,
   [string]$Provider = '',
@@ -60,6 +67,10 @@ $url = "$BaseUrl/?widget=1"
 if ($Mini) {
   $url += '&mini=1'
   if ($Provider) { $url += "&provider=$([Uri]::EscapeDataString($Provider))" }
+} else {
+  if ($Scale -le 0) { $Scale = 1.0 }
+  # 頁面用 CSS zoom 同步縮放(index.html 讀 &scale=),視窗尺寸在下面同乘,字級/血條一起縮
+  if ($Scale -ne 1.0) { $url += "&scale=$([string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:0.###}', $Scale))" }
 }
 
 # powershell.exe has no DPI-awareness manifest, so Windows DPI-virtualizes (bitmap-stretches)
@@ -160,6 +171,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Wpf;
@@ -174,6 +186,40 @@ namespace AiDashWidget {
     int _resizeZone = 8;  // how close to the true window edge counts as "resize" rather than "move"
     bool _mini;            // mini mode: single-line bar, drag-to-move only, no resize (too small for corner handles)
     Border _border;
+
+    // ---- dock / auto-hide: the page's dock button posts "dock:on"/"dock:off" web messages ----
+    // While docked, the window tucks itself off the right screen edge leaving only a small tab;
+    // a cursor-polling timer expands it when the mouse touches the edge strip and re-collapses
+    // it after the mouse has been away for a while. Polling (vs MouseEnter) is required because
+    // WebView2 swallows all mouse events over its own rectangle, so the host window never sees
+    // enter/leave while the cursor is over page content.
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+    struct POINT { public int X; public int Y; }
+    const double StripWidth = 14;  // logical px of the window left visible when collapsed (the tab)
+    bool _dockMode, _collapsed;
+    double _expandedLeft;
+    int _outsideTicks;
+    DispatcherTimer _dockTimer, _slideTimer;
+    double _slideTarget;
+    Border _dockTab;
+    DateTime _lastDragMsg; // for detecting a double press (= title-bar-style double-click)
+
+    // ---- ghost mode (click-through): clicks pass through to whatever is under the widget ----
+    // WS_EX_TRANSPARENT on the top-level window is NOT enough: WebView2 hosts its own native
+    // child HWNDs that hit-test independently, so the style must be pushed onto every child too.
+    // While ghosted the page can't be clicked at all, so the only way back is the global hotkey
+    // (Ctrl+Alt+W) registered in OnSourceInitialized.
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int idx);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int idx, int val);
+    delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr h, EnumWindowsProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
+    const int GWL_EXSTYLE = -20;
+    const int WS_EX_TRANSPARENT = 0x20;
+    const int WM_HOTKEY = 0x0312;
+    const int HOTKEY_ID = 0xA11;
+    bool _ghost;
+    Microsoft.Web.WebView2.Wpf.WebView2 _webView;
 
     public WidgetWindow(string url, string userDataFolder, double left, double top, double width, double height, bool mini) {
       _mini = mini;
@@ -191,6 +237,7 @@ namespace AiDashWidget {
       creationProps.UserDataFolder = userDataFolder;
 
       var webView = new WebView2();
+      _webView = webView;
       webView.CreationProperties = creationProps;
       webView.DefaultBackgroundColor = System.Drawing.Color.Transparent;
 
@@ -204,7 +251,21 @@ namespace AiDashWidget {
         webView.CoreWebView2.WebMessageReceived += (s2, e2) => {
           string msg;
           try { msg = e2.TryGetWebMessageAsString(); } catch { return; }
+          if (msg == "dock:on") { SetDockMode(true); return; }
+          if (msg == "dock:off") { SetDockMode(false); return; }
+          if (msg == "ghost:on") { SetGhost(true); return; }
+          if (msg == "ghost:off") { SetGhost(false); return; }
           if (msg != "drag") return;
+          // Two "drag" presses within 450ms = a double-click on empty content -> toggle dock
+          // (owner wanted double-click collapse). Routed back through the page (toggleDock ->
+          // its dock button click -> dock:on/off) so the button icon + localStorage stay in sync.
+          var nowMsg = DateTime.UtcNow;
+          if ((nowMsg - _lastDragMsg).TotalMilliseconds < 450) {
+            _lastDragMsg = DateTime.MinValue;
+            try { webView.CoreWebView2.PostWebMessageAsString("toggleDock"); } catch { }
+            return;
+          }
+          _lastDragMsg = nowMsg;
           var hwndSource = PresentationSource.FromVisual(this) as HwndSource;
           if (hwndSource == null) return;
           ReleaseCapture();
@@ -247,6 +308,29 @@ namespace AiDashWidget {
         root.Children.Add(MakeCornerHandle(HorizontalAlignment.Right, VerticalAlignment.Top, 14, Cursors.SizeNESW, new CornerRadius(0, 6, 0, 0)));
         root.Children.Add(MakeCornerHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, 16, Cursors.SizeNESW, new CornerRadius(0, 0, 0, 6)));
         root.Children.Add(MakeCornerHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, 17, Cursors.SizeNWSE, new CornerRadius(0, 0, 6, 0)));
+
+        // Tab shown only while docked+collapsed. Without it the strip left on-screen would be
+        // the window's transparent background + alpha~1 border -- i.e. literally invisible,
+        // nothing to aim the mouse at. Clicking it expands immediately (the polling timer would
+        // get there too, this just feels snappier).
+        _dockTab = new Border();
+        _dockTab.Width = StripWidth;
+        _dockTab.HorizontalAlignment = HorizontalAlignment.Left;
+        _dockTab.Margin = new Thickness(0, 24, 0, 24);
+        _dockTab.CornerRadius = new CornerRadius(7, 0, 0, 7);
+        _dockTab.Background = new SolidColorBrush(Color.FromArgb(210, 22, 34, 60));
+        _dockTab.BorderBrush = new SolidColorBrush(Color.FromArgb(120, 125, 211, 252));
+        _dockTab.BorderThickness = new Thickness(1, 1, 0, 1);
+        var tabGlyph = new TextBlock();
+        tabGlyph.Text = "\u276E"; // heavy left angle bracket -- escaped so a BOM-less ANSI read of this file can't mangle the literal
+        tabGlyph.FontSize = 9;
+        tabGlyph.Foreground = new SolidColorBrush(Color.FromArgb(220, 125, 211, 252));
+        tabGlyph.HorizontalAlignment = HorizontalAlignment.Center;
+        tabGlyph.VerticalAlignment = VerticalAlignment.Center;
+        _dockTab.Child = tabGlyph;
+        _dockTab.Visibility = Visibility.Collapsed;
+        _dockTab.MouseLeftButtonDown += (s, e) => { Expand(); e.Handled = true; };
+        root.Children.Add(_dockTab);
       }
       Content = root;
 
@@ -264,6 +348,9 @@ namespace AiDashWidget {
       // guessed scale factor, self-calibrate: we already know the current WPF Height and can ask
       // WebView2 for the resulting window.innerHeight in CSS px, so the ratio between them gives
       // the true conversion factor on whatever machine/monitor this actually runs on.
+      // Non-mini: window fits ONE provider card; the wool box below stays in the scroll area
+      // (owner's call 2026-07-19: keep the compact height, wool is "open" so scrolling down
+      // shows it expanded without an extra click -- do NOT size the window to include it).
       string measureScript = _mini
         ? "(function(){var el=document.getElementById('miniLine');return el?Math.ceil(el.getBoundingClientRect().height):-1;})()"
         : "(function(){var rs=document.querySelectorAll('.row');" +
@@ -289,13 +376,119 @@ namespace AiDashWidget {
               // Width off their intended values (window ends up centered and undersized instead
               // of pinned top-right). Reasserting the original constructor values is a no-op
               // when nothing drifted (the normal .ps1/.bat path) and a fix when it did.
-              Left = left; Top = top; Width = width;
+              // (If the page already asked to dock before this fires, keep the collapsed Left.)
+              Top = top; Width = width;
+              Left = _collapsed ? SystemParameters.WorkArea.Right - StripWidth : left;
             }
           }
         } catch { }
       };
 
       Loaded += (s, e) => { webView.Source = new Uri(url); };
+    }
+
+    protected override void OnSourceInitialized(EventArgs e) {
+      base.OnSourceInitialized(e);
+      var src = PresentationSource.FromVisual(this) as HwndSource;
+      if (src == null) return;
+      src.AddHook(WndProc);
+      RegisterHotKey(src.Handle, HOTKEY_ID, 0x2 | 0x1, (uint)'W'); // MOD_CONTROL|MOD_ALT + W
+    }
+
+    IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) {
+      if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID) {
+        SetGhost(!_ghost); // notifies the page so its button/localStorage follow
+        handled = true;
+      }
+      return IntPtr.Zero;
+    }
+
+    void SetGhost(bool on) {
+      _ghost = on;
+      var src = PresentationSource.FromVisual(this) as HwndSource;
+      if (src == null) return;
+      ApplyClickThrough(src.Handle, on);
+      // Chromium may spawn child HWNDs lazily; styles are (re)applied on every toggle, which in
+      // practice covers them all -- the browser child windows exist well before first toggle.
+      EnumChildWindows(src.Handle, (h, l) => { ApplyClickThrough(h, on); return true; }, IntPtr.Zero);
+      if (_webView != null && _webView.CoreWebView2 != null) {
+        try { _webView.CoreWebView2.PostWebMessageAsString(on ? "ghostState:on" : "ghostState:off"); } catch { }
+      }
+    }
+
+    void ApplyClickThrough(IntPtr hwnd, bool on) {
+      int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+      SetWindowLong(hwnd, GWL_EXSTYLE, on ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT));
+    }
+
+    void SetDockMode(bool on) {
+      if (_mini) return; // mini bar has no dock UI
+      _dockMode = on;
+      if (_dockTimer == null) {
+        _dockTimer = new DispatcherTimer();
+        _dockTimer.Interval = TimeSpan.FromMilliseconds(200);
+        _dockTimer.Tick += DockTick;
+      }
+      if (on) { _outsideTicks = 0; _dockTimer.Start(); Collapse(); }
+      else { _dockTimer.Stop(); Expand(); }
+    }
+
+    void Collapse() {
+      if (_collapsed) return;
+      _collapsed = true;
+      _expandedLeft = Left;
+      if (_dockTab != null) _dockTab.Visibility = Visibility.Visible;
+      SlideTo(SystemParameters.WorkArea.Right - StripWidth);
+    }
+
+    void Expand() {
+      if (!_collapsed) return;
+      _collapsed = false;
+      _outsideTicks = 0;
+      if (_dockTab != null) _dockTab.Visibility = Visibility.Collapsed;
+      double target = _expandedLeft;
+      double maxLeft = SystemParameters.WorkArea.Right - ActualWidth;
+      if (target > maxLeft) target = maxLeft; // never expand back to an off-screen position
+      SlideTo(target);
+    }
+
+    void SlideTo(double target) {
+      // Simple exponential ease via timer -- Window.Left is animatable in theory but WPF
+      // window-position animations are notoriously flaky, a 15ms lerp loop is dead reliable.
+      _slideTarget = target;
+      if (_slideTimer == null) {
+        _slideTimer = new DispatcherTimer();
+        _slideTimer.Interval = TimeSpan.FromMilliseconds(15);
+        _slideTimer.Tick += (s, e) => {
+          double d = _slideTarget - Left;
+          if (Math.Abs(d) < 2) { Left = _slideTarget; _slideTimer.Stop(); }
+          else { Left += d * 0.35; }
+        };
+      }
+      _slideTimer.Stop();
+      _slideTimer.Start();
+    }
+
+    void DockTick(object sender, EventArgs e) {
+      POINT p;
+      if (!GetCursorPos(out p)) return;
+      var src = PresentationSource.FromVisual(this);
+      if (src == null || src.CompositionTarget == null) return;
+      // GetCursorPos is physical screen px; WPF Left/Top/WorkArea are logical units.
+      var pt = src.CompositionTarget.TransformFromDevice.Transform(new Point(p.X, p.Y));
+      if (_collapsed) {
+        // Cursor touching the edge strip, within the window's vertical span -> slide out
+        if (pt.X >= SystemParameters.WorkArea.Right - StripWidth * 1.5
+            && pt.Y >= Top && pt.Y <= Top + ActualHeight) {
+          Expand();
+        }
+      } else if (_dockMode) {
+        // Cursor away from the window (40px grace zone against edge jitter) for ~1.2s -> tuck away
+        bool near = pt.X >= Left - 40 && pt.X <= Left + ActualWidth + 40
+                 && pt.Y >= Top - 40 && pt.Y <= Top + ActualHeight + 40;
+        if (near) _outsideTicks = 0;
+        else if (++_outsideTicks >= 6) Collapse();
+      }
     }
 
     Border MakeCornerHandle(HorizontalAlignment hAlign, VerticalAlignment vAlign, int htCode, Cursor cursor, CornerRadius radius) {
@@ -366,8 +559,9 @@ $areaRight = $area.Right / $dpiScale
 $areaTop = $area.Top / $dpiScale
 $areaWidth = $area.Width / $dpiScale
 
-if ($Width -le 0) { $Width = if ($Mini) { [int]($areaWidth / 5) } else { 380 } }
-if ($Height -le 0) { $Height = if ($Mini) { 28 } else { 480 } } # self-calibrated to real content after load either way
+# 340:緊湊樣式(字級不縮)下的舒適寬度,約當舊版 380 寬的 90% 觀感
+if ($Width -le 0) { $Width = if ($Mini) { [int]($areaWidth / 5) } else { [int](340 * $Scale) } }
+if ($Height -le 0) { $Height = if ($Mini) { 28 } else { [int](480 * $Scale) } } # self-calibrated to real content after load either way
 
 $x = $areaRight - $Width - $Margin
 $y = $areaTop + $Margin

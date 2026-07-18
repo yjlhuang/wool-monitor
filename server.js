@@ -234,16 +234,19 @@ async function fetchClaude() {
         kind: l.kind, group: l.group, scopeName,
         usedPct: num(l.percent),
         resetsAt: typeof l.resets_at === 'string' ? l.resets_at : null,
+        // 視窗未啟動(claude.ai 顯示 "Starts when a message is sent")時 resets_at 只是
+        // 會隨輪詢漂移的佔位值,前端要靠這個旗標改顯示「發訊息後起算」而非倒數
+        isActive: l.is_active !== false,
       });
     }
   }
   const lSession = fromLimits.find(l => l.kind === 'session' && !l.scopeName);
   const lWeekly = fromLimits.find(l => l.group === 'weekly' && !l.scopeName);
   const session = lSession
-    ? { usedPct: lSession.usedPct, resetsAt: lSession.resetsAt, windowMinutes: 300 }
+    ? { usedPct: lSession.usedPct, resetsAt: lSession.resetsAt, windowMinutes: 300, isActive: lSession.isActive }
     : pick(data.five_hour, 300);
   const longterm = lWeekly
-    ? { usedPct: lWeekly.usedPct, resetsAt: lWeekly.resetsAt, windowMinutes: 10080 }
+    ? { usedPct: lWeekly.usedPct, resetsAt: lWeekly.resetsAt, windowMinutes: 10080, isActive: lWeekly.isActive }
     : pick(data.seven_day, 10080);
   if (!session && !longterm) return { ok: false, errCode: 'FORMAT_UNEXPECTED', errParams: { service: 'Anthropic' } };
 
@@ -255,6 +258,7 @@ async function fetchClaude() {
       usedPct: l.usedPct,
       resetsAt: l.resetsAt,
       windowMinutes: l.group === 'weekly' ? 10080 : (l.group === 'session' ? 300 : null),
+      isActive: l.isActive,
     });
   }
   const opus = pick(data.seven_day_opus, 10080);
@@ -875,6 +879,7 @@ function woolConfig() {
   const w = (readJsonSafe(path.join(ROOT, 'config.json')) || {}).wool || {};
   return {
     budgetUsd: num(w.budgetUsd) != null ? w.budgetUsd : 10,
+    twdRate: (num(w.twdRate) != null && w.twdRate > 0) ? w.twdRate : 30, // USD→台幣顯示匯率,前端表單可調
     startDate: typeof w.startDate === 'string' && w.startDate ? w.startDate : null,   // 'YYYY-MM-DD',credit 起算日
     expiryDate: typeof w.expiryDate === 'string' && w.expiryDate ? w.expiryDate : null, // 訂閱到期日
   };
@@ -914,6 +919,7 @@ function woolSummary() {
     scanning: woolScanning,
     updatedAt: woolLastScan ? new Date(woolLastScan).toISOString() : null,
     totalUsd: r2(totalUsd), budgetUsd: cfg.budgetUsd, remainingUsd: r2(remaining),
+    twdRate: cfg.twdRate,
     perDayUsd: r2(perDay),
     daysLeft: daysLeft != null ? Math.round(daysLeft * 10) / 10 : null,
     depleteDate: daysLeft != null ? localDateStr(now + daysLeft * 86400000) : null,
@@ -1005,6 +1011,10 @@ const server = http.createServer(async (req, res) => {
       if (body.budgetUsd !== undefined) {
         const b = parseFloat(body.budgetUsd);
         cfg.wool.budgetUsd = isFinite(b) && b > 0 ? b : 10;
+      }
+      if (body.twdRate !== undefined) {
+        const r = parseFloat(body.twdRate);
+        cfg.wool.twdRate = isFinite(r) && r > 0 ? r : 30;
       }
       const dateOk = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
       if (body.startDate !== undefined) cfg.wool.startDate = dateOk(body.startDate) ? body.startDate : null;
