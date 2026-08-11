@@ -419,7 +419,7 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
 <header>
   <h1><span data-i18n="pageTitle">AI 使用量儀表板</span> <span class="pix">▮▮▮▯▯</span></h1>
   <span id="status"><span class="dot" id="statusDot"></span><span id="statusText" data-i18n="statusConnecting">連線中…</span></span>
-  <span id="verTag">wool-v0.6</span>
+  <span id="verTag">wool-v0.8</span>
   <span class="spacer"></span>
   <button id="langToggle" type="button"></button>
   <button id="addBtn" class="primary" data-i18n="addProviderBtn">＋ 新增提供商</button>
@@ -582,23 +582,23 @@ const I18N = {
     extraWeeklyUsage: '{label} 每週使用率',
     extraWeeklyRespawn: '{label} 每週重生',
     woolTitle: '薅羊毛進度',
-    woolBurned: '已燒 {used} / {budget}',
-    woolRemain: '剩 {remain}',
+    woolBurned: '本期已薅 {used} / 月費 {fee}',
+    woolRoi: '回本 {roi} 倍',
+    woolNotYet: '還差 {gap} 回本',
+    woolCycle: '本期 {start} 〜 {next}(第 {n}/{total} 天)',
     woolRate: '近 7 日 ≈ {rate}/天',
-    woolEta: '照此速度約 {days} 天後榨乾({date})',
-    woolNoRate: '近 7 日沒有 Fable 用量,無法估速度',
-    woolFitYes: '😌 到期({date})前燒得完',
-    woolFitNo: '🚨 到期({date})前燒不完,加緊薅!',
-    woolDone: '🏆 完美榨乾!',
-    woolPctMilked: '已薅 {pct}%',
+    woolProject: '照此速度本期收在 ≈ {used}({roi} 倍)',
+    woolNoRate: '近 7 日沒有用量,無法估速度',
+    woolLifetime: '累計 {used} / 已付 {paid}({n} 期)= {roi} 倍',
+    woolPctMilked: '回本 {pct}%',
     woolScanning: '掃描本機 log 中…',
     woolOffline: '無法連線本機伺服器',
-    woolMsgs: '{n} 則 Fable 訊息 · 首筆 {date}',
-    woolDisclaimer: '🐑 佛系粗估:只算本機 Claude Code log(多帳號混計),不含 claude.ai 網頁端。定價 input $10 / output $50 / cache 讀 $1 / cache 寫 $12.5〜$20(每百萬 tokens)。',
-    woolBudgetLabel: '額度 US$',
+    woolMsgs: '{n} 則訊息 · 首筆 {date}',
+    woolByModel: '本期模型別:{list}',
+    woolDisclaimer: '🐑 佛系粗估:拿「同樣的活兒去打 API 要付多少」跟月費比,不是帳單。只算本機 Claude Code log(多帳號混計、不限模型),不含 claude.ai 網頁端。各模型按自己的 API 牌價換算(每百萬 tokens:Fable $10/$50、Opus $5/$25、Sonnet $3/$15、Haiku $1/$5;cache 讀 0.1×、寫 1.25〜2× input)。',
+    woolFeeLabel: '月費 US$',
     woolTwdRateLabel: '匯率 US$→NT$',
-    woolStartLabel: '起算日',
-    woolExpiryLabel: '到期日',
+    woolStartLabel: '訂閱起始日',
     woolSaveBtn: '儲存',
     woolSaved: '🐑 薅羊毛設定已儲存',
     woolSaveFailed: '儲存失敗:{err}',
@@ -686,23 +686,23 @@ const I18N = {
     extraWeeklyUsage: '{label} Weekly Usage',
     extraWeeklyRespawn: '{label} Weekly Respawn',
     woolTitle: 'Wool-Milking Progress',
-    woolBurned: '{used} / {budget} burned',
-    woolRemain: '{remain} left',
+    woolBurned: 'This cycle {used} / {fee} fee',
+    woolRoi: '{roi}× value',
+    woolNotYet: '{gap} to break even',
+    woolCycle: 'Cycle {start} – {next} (day {n}/{total})',
     woolRate: 'Last 7 days ≈ {rate}/day',
-    woolEta: 'At this rate, dry in {days} days ({date})',
-    woolNoRate: 'No Fable usage in the last 7 days — cannot estimate rate',
-    woolFitYes: '😌 Will burn out before expiry ({date})',
-    woolFitNo: '🚨 Will NOT burn out before expiry ({date}) — milk harder!',
-    woolDone: '🏆 Perfectly milked dry!',
-    woolPctMilked: '{pct}% milked',
+    woolProject: 'On track for ≈ {used} this cycle ({roi}×)',
+    woolNoRate: 'No usage in the last 7 days — cannot estimate rate',
+    woolLifetime: 'All time {used} / {paid} paid ({n} cycles) = {roi}×',
+    woolPctMilked: '{pct}% to break even',
     woolScanning: 'Scanning local logs…',
     woolOffline: 'Cannot reach the local server',
-    woolMsgs: '{n} Fable messages · first on {date}',
-    woolDisclaimer: '🐑 Rough estimate: local Claude Code logs only (all accounts mixed), excludes claude.ai web usage. Pricing: input $10 / output $50 / cache read $1 / cache write $12.5–$20 (per 1M tokens).',
-    woolBudgetLabel: 'Budget US$',
+    woolMsgs: '{n} messages · first on {date}',
+    woolByModel: 'By model this cycle: {list}',
+    woolDisclaimer: '🐑 Rough estimate: what the same work would cost on the API, compared against your subscription fee — not a bill. Local Claude Code logs only (all accounts, all models), excludes claude.ai web usage. Each model is priced at its own API list rate (per 1M tokens: Fable $10/$50, Opus $5/$25, Sonnet $3/$15, Haiku $1/$5; cache read 0.1×, write 1.25–2× input).',
+    woolFeeLabel: 'Monthly fee US$',
     woolTwdRateLabel: 'Rate US$→NT$',
-    woolStartLabel: 'Start date',
-    woolExpiryLabel: 'Expiry date',
+    woolStartLabel: 'Subscribed since',
     woolSaveBtn: 'Save',
     woolSaved: '🐑 Wool settings saved',
     woolSaveFailed: 'Save failed: {err}',
@@ -1273,38 +1273,46 @@ function renderWool() {
   const w = woolData;
   const rate = (w.twdRate > 0) ? w.twdRate : 30;
   const $nt = v => fmtTwd(v, rate);
-  brief.textContent = t('woolBurned', { used: $nt(w.totalUsd), budget: $nt(w.budgetUsd) })
-    + (w.scanning ? ' · ' + t('woolScanning') : '');
+  const c = w.cycle || { usd: 0, roi: 0, days: 30, elapsed: 1 };
+  // 訂閱制:分母是「本期月費」,燒超過 = 賺到,所以血條 100% 代表回本,超過只顯示倍率
+  const burned = t('woolBurned', { used: $nt(c.usd), fee: $nt(w.monthlyFeeUsd) });
+  const roiTag = c.roi >= 1 ? t('woolRoi', { roi: c.roi }) : t('woolNotYet', { gap: $nt(w.monthlyFeeUsd - c.usd) });
+  brief.textContent = burned + ' · ' + roiTag + (w.scanning ? ' · ' + t('woolScanning') : '');
   // 使用者正在表單裡打字時不要整塊重畫(輪詢會把輸入洗掉)
   if (body.contains(document.activeElement) && document.activeElement !== body) return;
-  const pct = w.budgetUsd > 0 ? Math.min(100, w.totalUsd / w.budgetUsd * 100) : 0;
+  const pct = w.monthlyFeeUsd > 0 ? Math.min(100, c.usd / w.monthlyFeeUsd * 100) : 0;
   const stats = [];
-  stats.push(`<span>${t('woolBurned', { used: $nt(w.totalUsd), budget: $nt(w.budgetUsd) })}</span>`);
-  stats.push(`<span>${t('woolRemain', { remain: $nt(w.remainingUsd) })}</span>`);
+  stats.push(`<span>${burned}</span>`);
+  stats.push(`<span>${roiTag}</span>`);
+  stats.push(`<span>${t('woolCycle', { start: c.start, next: c.nextCharge, n: c.elapsed, total: c.days })}</span>`);
   if (w.perDayUsd > 0) {
     stats.push(`<span>${t('woolRate', { rate: $nt(w.perDayUsd) })}</span>`);
-    if (w.daysLeft != null && w.remainingUsd > 0) stats.push(`<span>${t('woolEta', { days: w.daysLeft, date: w.depleteDate || '—' })}</span>`);
+    if (c.elapsed < c.days) stats.push(`<span>${t('woolProject', { used: $nt(c.projectedUsd), roi: c.projectedRoi })}</span>`);
   } else {
     stats.push(`<span>${t('woolNoRate')}</span>`);
   }
-  if (w.remainingUsd <= 0) {
-    stats.push(`<span>${t('woolDone')}</span>`);
-  } else if (w.expiryDate && w.depleteDate) {
-    stats.push(`<span>${w.depleteDate <= w.expiryDate ? t('woolFitYes', { date: w.expiryDate }) : t('woolFitNo', { date: w.expiryDate })}</span>`);
+  if (w.lifetimeRoi != null) {
+    stats.push(`<span class="wool-note">${t('woolLifetime', { used: $nt(w.totalUsd), paid: $nt(w.paidUsd), n: w.cyclesPaid, roi: w.lifetimeRoi })}</span>`);
   }
   if (w.msgCount) stats.push(`<span class="wool-note">${t('woolMsgs', { n: w.msgCount, date: w.firstDate || '—' })}</span>`);
+  // 模型別小計:模型名去掉 claude- 前綴,只列前 4 名(其餘併成「其他」),浮窗塞得下
+  if (Array.isArray(w.models) && w.models.length) {
+    const top = w.models.slice(0, 4).map(m => `${m.model.replace(/^claude-/, '')} ${$nt(m.usd)}`);
+    const rest = w.models.slice(4).reduce((a, m) => a + m.usd, 0);
+    if (rest > 0) top.push(`… ${$nt(rest)}`);
+    stats.push(`<span class="wool-note">${t('woolByModel', { list: top.join(' · ') })}</span>`);
+  }
   body.innerHTML = `
     <div class="bar wool-bar">
       <div class="fill" style="width:${pct.toFixed(2)}%"></div>
       <div class="ticks"></div>
-      <span class="bar-text">${w.remainingUsd <= 0 ? t('woolDone') : t('woolPctMilked', { pct: pct.toFixed(1) })}</span>
+      <span class="bar-text">${c.roi >= 1 ? t('woolRoi', { roi: c.roi }) : t('woolPctMilked', { pct: pct.toFixed(1) })}</span>
     </div>
     <div class="wool-stats">${stats.join('')}</div>
     <div class="wool-form">
-      <label>${t('woolBudgetLabel')}<input id="wBudget" type="number" min="0.5" step="0.5" value="${w.budgetUsd}"></label>
+      <label>${t('woolFeeLabel')}<input id="wFee" type="number" min="0.5" step="0.5" value="${w.monthlyFeeUsd}"></label>
       <label>${t('woolTwdRateLabel')}<input id="wTwd" type="number" min="1" step="0.1" value="${rate}"></label>
       <label>${t('woolStartLabel')}<input id="wStart" type="date" value="${w.startDate || ''}"></label>
-      <label>${t('woolExpiryLabel')}<input id="wExpiry" type="date" value="${w.expiryDate || ''}"></label>
       <button type="button" id="wSave">${t('woolSaveBtn')}</button>
     </div>
     <div class="wool-note">${t('woolDisclaimer')}</div>`;
@@ -1316,10 +1324,9 @@ async function saveWoolConfig() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        budgetUsd: $('#wBudget').value,
+        monthlyFeeUsd: $('#wFee').value,
         twdRate: $('#wTwd').value,
         startDate: $('#wStart').value || null,
-        expiryDate: $('#wExpiry').value || null,
       }),
     });
     const j = await r.json();

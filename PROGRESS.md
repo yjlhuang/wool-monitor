@@ -3,7 +3,56 @@
 > 給下一個 session（或另一個帳號的 Claude）接手用的狀態快照。
 > 讀完這份＋README 就能繼續，不用重新考古。
 
-## 目前版本:wool-v0.6(2026-07-19)
+## 目前版本:wool-v0.8(2026-08-11)
+
+### v0.8 內容:分母換成「Pro 月費」,語意翻轉
+
+主人是 **Claude Pro 訂閱戶**(US$20/月),v0.7 之後的「額度 $20 一桶 credit」前提整個失效
+(算全模型後直接爆表變「完美榨乾」,毫無資訊量)。這版把整張表的語意翻過來:
+**不是「一桶錢燒到乾」,是「這期付的月費薅回幾倍」**——燒越多越賺,血條衝滿是好事。
+
+- **設定欄位**:`budgetUsd`/`expiryDate` → `monthlyFeeUsd`(預設 20)+ `startDate`(訂閱起始日)。
+  `woolConfig()` 讀不到 `monthlyFeeUsd` 時會**沿用舊的 `budgetUsd` 當月費**(不用手動改檔);
+  存檔時才把兩個舊鍵刪掉。到期日整個拿掉——訂閱是每月續約,沒有「到期前燒不完」這回事。
+- **帳單週期 `billingCycle()`**:以訂閱起始日的「日」當錨點算出本期 [start, nextCharge)。
+  月底錨點(29〜31)遇短月夾到當月最後一天;第一期不會早於訂閱起始日本身。
+  沒設起始日就退回自然月。
+- **`/api/wool` 回傳改版**:拿掉 `budgetUsd`/`remainingUsd`/`daysLeft`/`depleteDate`/`expiryDate`,
+  改回 `monthlyFeeUsd`、`cycle{start,nextCharge,days,elapsed,usd,roi,projectedUsd,projectedRoi}`、
+  `cyclesPaid`/`paidUsd`/`lifetimeRoi`。`totalUsd` 維持累計(訂閱起始日之後)。
+- **`models[]` 與 `msgCount` 改成只算本期**(和標題數字對得起來);`totalUsd` 仍是累計,
+  由「累計 … = N 倍」那行單獨呈現。⚠️ 模型別各自四捨五入,加總可能和 `cycle.usd` 差 1 分錢。
+- **前端**:血條 100% = 回本(超過顯示「回本 N 倍」而非壓在 100%),
+  新增本期區間/第幾天、期末預估、累計回本倍率;表單三欄(月費/匯率/訂閱起始日)。
+- 實測(2026-08-11,本期第 11/31 天):本期 **回本 21.9 倍**、期末預估 61.9 倍;
+  累計回本 43.2 倍。(絕對金額不入版控,要對數字自己開 dashboard 看)
+
+## 前一版:wool-v0.7(2026-08-11)
+
+### v0.7 內容
+
+- **薅羊毛不再只算 Fable(主人指定:Pro 方案已不含 Fable)**:
+  `scanFableFile` → `scanWoolFile`,字串預篩從 `"claude-fable` 放寬成 `"claude-`
+  (順帶濾掉 `<synthetic>` 那種非模型訊息),model 前綴檢查同步放寬。
+- **改成模型別計價**:同一條公式、不同單價。新增 `WOOL_MODEL_PRICE`
+  (regex → [input, output],由上往下第一個命中為準,所以新世代 Opus 要排在泛用
+  Opus 之前),cache 全部由 input 推導:讀 0.1×、寫 5m 1.25×、寫 1h 2×
+  ——代進 Fable 的 $10 剛好還原舊版寫死的 $1/$12.5/$20,舊數字沒被改動。
+  認不得的新模型 fallback 當 Opus 級($5/$25)。
+  ⚠️ 拿 Fable 的 $10/$50 去算 Opus/Sonnet 會嚴重高估,所以不是「全部套同一組價」。
+- **快取版本號 `WOOL_CACHE_VER`**:計價規則改了但 jsonl 的 mtime/size 沒變,
+  舊快取會被沿用 → 顯示舊價。加 `v` 欄位,版本不合就整包重掃(這次已重掃過)。
+  快取列從 `[id, date, usd]` 變成 `[id, date, usd, model]`,並在**檔內先去重**
+  (一則訊息的每個 content block 各佔一行,usage 會重複寫;舊版靠全域 Map 覆蓋
+  才沒重複計費,但快取檔被灌成 483KB)。
+- **模型別小計**:`/api/wool` 多回 `models: [{model, usd, msgs}]`(依金額排序,
+  和 `totalUsd` 同一個起算日過濾條件),前端 stats 多一行「模型別:opus-5 NT$… ·
+  fable-5 NT$…」(只列前 4 名,其餘併成「…」)。
+- **`msgCount` 語意修正**:原本回 `byId.size`(全歷史),但 `totalUsd` 是起算日之後的,
+  兩個數字對不起來(實測差了三倍以上)。改成只數計入金額的訊息;
+  `firstDate` 維持全歷史最早日(留著讓主人挑起算日)。
+
+## 前一版:wool-v0.6(2026-07-19)
 
 ### v0.6 內容
 
@@ -92,6 +141,7 @@
   - `scanFableFile`/`rescanWool`/`woolSummary`(server.js):增量掃 jsonl
     （mtime+size 判斷）、`"claude-fable` 字串預篩、message id 全域去重、
     cache 5m/1h 分開計價。快取 `wool-cache.json`（gitignore）。
+    ※ v0.7 已改名 `scanWoolFile` 並放寬成不限模型、模型別計價,見上方 v0.7 段。
   - API:`GET /api/wool`、`POST /api/wool/config`（budgetUsd/startDate/expiryDate
     → `config.json` 的 `wool` 鍵）。
   - 前端可摺疊區塊＋金色進度條＋設定表單，5 分鐘輪詢（掃描中 8 秒重試）。
@@ -108,8 +158,13 @@
 ### 主人已裁決的事(不要重新問)
 
 - cache token 全算（施工單原本只寫 input/output，會低估到失真）。
-- 額度預設 $10（贈送 credit），起算日/到期日 UI 可填可留空——主人自己也還不確定
-  日期（雙帳號、其一誤訂），留空時顯示全歷史總量。
+- 薅羊毛**不限模型**(2026-08-11 主人指定,Pro 方案已不含 Fable):Sonnet / Opus /
+  Fable 全算,每則按自己模型的 API 牌價,不是全部套 Fable 的 $10/$50。
+- **主人是 Claude Pro 訂閱戶(US$20/月)**,薅羊毛的分母是**月費**、單位是**回本倍率**,
+  不是「一桶 credit 燒到乾」(2026-08-11 主人指定)。血條衝滿=好事,不要當警戒條處理。
+- ~~額度預設 $10（贈送 credit），起算日/到期日 UI 可填可留空——主人自己也還不確定
+  日期（雙帳號、其一誤訂），留空時顯示全歷史總量。~~
+  **已作廢(v0.8)**:改成 Pro 月費基準,額度/到期日欄位已移除,起始日改當帳單週期錨點。
 - 路 B（sniff claude.ai credit endpoint）跳過。
 - 通知門檻 90%、輪詢/退避沿用原作,不改短。
 

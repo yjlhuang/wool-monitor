@@ -803,56 +803,80 @@ function scanCodexContext() {
   return sessions.slice(0, 8).map(({ label, usedPct, ageMin }) => ({ label, usedPct, ageMin }));
 }
 
-// ---------- 🐑 薅羊毛:掃 ~/.claude/projects/*.jsonl 精算 Fable 已燒金額(路 A,本機粗估) ----------
-// 定價(USD / 1M tokens):input $10、output $50、cache 讀 $1、cache 寫 5 分鐘 $12.5、1 小時 $20。
+// ---------- 🐑 薅羊毛:掃 ~/.claude/projects/*.jsonl 精算已燒金額(路 A,本機粗估) ----------
+// 2026-08-11 起不再只算 Fable:Pro 方案已不含 Fable,改成不限模型全算(Fable / Opus / Sonnet / Haiku…),
+// 每則訊息各按「自己那顆模型」的第一方 API 牌價換算(同一條公式、不同單價)。
 // 佛系粗估:只算 Claude Code 本機 log,不含 claude.ai 網頁端;雙帳號的 log 混在同一目錄,一併計入。
 const readline = require('readline');
 const WOOL_CACHE_PATH = path.join(ROOT, 'wool-cache.json');
-const WOOL_PRICE = { input: 10, output: 50, cacheRead: 1, cache5m: 12.5, cache1h: 20 };
+const WOOL_CACHE_VER = 2; // 計價規則/快取欄位改版時 +1,強制整包重掃(否則 mtime 沒變的檔會沿用舊價)
+// [模型比對, input, output](USD / 1M tokens,Anthropic 第一方牌價)。
+// cache 一律由 input 推導:讀 0.1×、寫 5 分鐘 1.25×、寫 1 小時 2×(和舊版 Fable 的 $1/$12.5/$20 完全一致)。
+// 由上往下第一個命中的為準,所以「新世代 Opus」要排在「泛用 Opus」前面。
+const WOOL_MODEL_PRICE = [
+  [/^claude-(fable|mythos)-/, 10, 50],           // Fable 5 / Mythos 5
+  [/^claude-opus-(5|4-8|4-7|4-6|4-5)/, 5, 25],   // Opus 5 / 4.8 / 4.7 / 4.6 / 4.5
+  [/^claude-opus-/, 15, 75],                     // 舊世代 Opus(4.1 / 4.0 / 3)
+  [/^claude-sonnet-/, 3, 15],                    // Sonnet 5 / 4.6 / 4.5 / 4(Sonnet 5 另有 $2/$10 促銷價,這裡取牌價,寧可高估)
+  [/^claude-3-(5|7)-sonnet/, 3, 15],
+  [/^claude-haiku-4-5/, 1, 5],
+  [/^claude-3-5-haiku/, 0.8, 4],
+  [/^claude-3-haiku/, 0.25, 1.25],
+];
+const WOOL_PRICE_FALLBACK = [5, 25]; // 認不得的新模型:當 Opus 級估
 const WOOL_RESCAN_MS = 300000; // 增量重掃間隔 5 分鐘
 
-let woolCache = null;   // { files: { [路徑]: { mtimeMs, size, msgs: [[messageId, 'YYYY-MM-DD', usd], ...] } } }
+let woolCache = null;   // { v, files: { [路徑]: { mtimeMs, size, msgs: [[messageId, 'YYYY-MM-DD', usd, model], ...] } } }
 let woolScanning = false;
 let woolLastScan = 0;
 
 function loadWoolCache() {
   if (!woolCache) {
     const c = readJsonSafe(WOOL_CACHE_PATH);
-    woolCache = (c && typeof c.files === 'object' && c.files) ? c : { files: {} };
+    woolCache = (c && c.v === WOOL_CACHE_VER && typeof c.files === 'object' && c.files)
+      ? c
+      : { v: WOOL_CACHE_VER, files: {} }; // 版本不合(或首次)就整包重掃
   }
   return woolCache;
 }
 
-function fableMsgCost(u) {
+function woolPrice(model) {
+  for (const [re, input, output] of WOOL_MODEL_PRICE) if (re.test(model)) return [input, output];
+  return WOOL_PRICE_FALLBACK;
+}
+
+function woolMsgCost(model, u) {
+  const [pIn, pOut] = woolPrice(model);
   const cc = u.cache_creation;
   // 有 5m/1h 細分就分開計價;沒有就整包當 5 分鐘 cache(便宜檔,寧可低估不高估)
   const c1h = cc ? (cc.ephemeral_1h_input_tokens || 0) : 0;
   const c5m = cc ? (cc.ephemeral_5m_input_tokens || 0) : (u.cache_creation_input_tokens || 0);
-  return (u.input_tokens || 0) * WOOL_PRICE.input / 1e6
-       + (u.output_tokens || 0) * WOOL_PRICE.output / 1e6
-       + (u.cache_read_input_tokens || 0) * WOOL_PRICE.cacheRead / 1e6
-       + c5m * WOOL_PRICE.cache5m / 1e6
-       + c1h * WOOL_PRICE.cache1h / 1e6;
+  return ((u.input_tokens || 0) * pIn
+        + (u.output_tokens || 0) * pOut
+        + (u.cache_read_input_tokens || 0) * pIn * 0.1
+        + c5m * pIn * 1.25
+        + c1h * pIn * 2) / 1e6;
 }
 
 const localDateStr = ms => { const d = new Date(ms); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
 
-async function scanFableFile(fp) {
-  const msgs = [];
+async function scanWoolFile(fp) {
+  // 檔內先以 message id 去重:一則訊息的每個 content block 各佔一行,usage 會被重複寫好幾次
+  const msgs = new Map();
   const rl = readline.createInterface({ input: fs.createReadStream(fp, { encoding: 'utf8' }), crlfDelay: Infinity });
   for await (const line of rl) {
-    if (!line.includes('"claude-fable')) continue; // 先做便宜的字串預篩,躲掉絕大多數行的 JSON.parse
+    if (!line.includes('"claude-')) continue; // 先做便宜的字串預篩,躲掉絕大多數行的 JSON.parse(順便濾掉 <synthetic>)
     let j; try { j = JSON.parse(line); } catch { continue; }
     if (j.type !== 'assistant') continue;
     const m = j.message;
-    if (!m || typeof m.model !== 'string' || !m.model.startsWith('claude-fable') || !m.usage) continue;
+    if (!m || typeof m.model !== 'string' || !m.model.startsWith('claude-') || !m.usage) continue;
     const id = m.id || j.uuid;
     const ts = Date.parse(j.timestamp);
-    if (!id || isNaN(ts)) continue;
-    const usd = fableMsgCost(m.usage);
-    if (usd > 0) msgs.push([id, localDateStr(ts), Math.round(usd * 1e6) / 1e6]);
+    if (!id || isNaN(ts) || msgs.has(id)) continue;
+    const usd = woolMsgCost(m.model, m.usage);
+    if (usd > 0) msgs.set(id, [id, localDateStr(ts), Math.round(usd * 1e6) / 1e6, m.model]);
   }
-  return msgs;
+  return [...msgs.values()];
 }
 
 async function rescanWool() {
@@ -875,7 +899,7 @@ async function rescanWool() {
         seen.add(fp);
         const c = cache.files[fp];
         if (c && c.mtimeMs === st.mtimeMs && c.size === st.size) continue; // 沒動過,沿用快取
-        try { cache.files[fp] = { mtimeMs: st.mtimeMs, size: st.size, msgs: await scanFableFile(fp) }; } catch {}
+        try { cache.files[fp] = { mtimeMs: st.mtimeMs, size: st.size, msgs: await scanWoolFile(fp) }; } catch {}
       }
     }
     for (const fp of Object.keys(cache.files)) if (!seen.has(fp)) delete cache.files[fp];
@@ -886,12 +910,31 @@ async function rescanWool() {
 
 function woolConfig() {
   const w = (readJsonSafe(path.join(ROOT, 'config.json')) || {}).wool || {};
+  // v0.8 改訂閱制基準:分母從「一桶贈送 credit」換成「每月月費」(Claude Pro US$20)。
+  // 舊 config 的 budgetUsd 直接沿用當月費,不用手動改檔。
+  const fee = num(w.monthlyFeeUsd) != null ? w.monthlyFeeUsd
+            : (num(w.budgetUsd) != null ? w.budgetUsd : 20);
   return {
-    budgetUsd: num(w.budgetUsd) != null ? w.budgetUsd : 10,
+    monthlyFeeUsd: fee > 0 ? fee : 20,
     twdRate: (num(w.twdRate) != null && w.twdRate > 0) ? w.twdRate : 30, // USD→台幣顯示匯率,前端表單可調
-    startDate: typeof w.startDate === 'string' && w.startDate ? w.startDate : null,   // 'YYYY-MM-DD',credit 起算日
-    expiryDate: typeof w.expiryDate === 'string' && w.expiryDate ? w.expiryDate : null, // 訂閱到期日
+    startDate: typeof w.startDate === 'string' && w.startDate ? w.startDate : null,   // 'YYYY-MM-DD',訂閱起始日(決定帳單週期是每月幾號)
   };
+}
+
+// 帳單週期:以訂閱起始日的「日」為錨點,算出今天所在的這一期 [start, nextCharge)。
+// 月底錨點(29〜31)遇到短月會夾到該月最後一天(和多數訂閱制的作法一致)。
+function billingCycle(startDate, nowMs) {
+  const now = new Date(nowMs);
+  const anchorDay = startDate ? parseInt(startDate.slice(8, 10), 10) : 1;
+  const dayIn = (y, m) => Math.min(anchorDay, new Date(y, m + 1, 0).getDate()); // 該月的錨點日(夾月底)
+  let y = now.getFullYear(), m = now.getMonth();
+  if (now.getDate() < dayIn(y, m)) { m--; if (m < 0) { m = 11; y--; } } // 還沒到這個月的扣款日 → 還在上一期
+  let start = new Date(y, m, dayIn(y, m));
+  let nm = m + 1, ny = y; if (nm > 11) { nm = 0; ny++; }
+  const nextCharge = new Date(ny, nm, dayIn(ny, nm));
+  // 訂閱起始日當天才是第一期的開頭,不要把週期往前推到訂閱之前
+  if (startDate && localDateStr(start.getTime()) < startDate) start = new Date(startDate + 'T00:00:00');
+  return { start: localDateStr(start.getTime()), nextCharge: localDateStr(nextCharge.getTime()) };
 }
 
 function woolSummary() {
@@ -901,17 +944,27 @@ function woolSummary() {
   // 以 message id 全域去重:同一 session 續接/fork 時,舊訊息會被複製到新 jsonl,不去重會重複計費
   const byId = new Map();
   for (const f of Object.values(cache.files)) {
-    for (const [id, date, usd] of (f.msgs || [])) byId.set(id, [date, usd]);
+    for (const [id, date, usd, model] of (f.msgs || [])) byId.set(id, [date, usd, model || 'unknown']);
   }
+  const now = Date.now();
+  const cyc = billingCycle(cfg.startDate, now);
+  const today = localDateStr(now);
+
   const byDay = {};
-  let firstDate = null;
-  for (const [date, usd] of byId.values()) {
+  const byModel = {}; // 模型別小計:**只算本期**,和上面的本期金額對得起來
+  let firstDate = null;  // 本機 log 最早的一天(不受起算日影響,方便回頭挑訂閱起始日)
+  let msgCount = 0;      // 本期實際計入金額的訊息數
+  for (const [date, usd, model] of byId.values()) {
     if (!firstDate || date < firstDate) firstDate = date;
     if (cfg.startDate && date < cfg.startDate) continue;
     byDay[date] = (byDay[date] || 0) + usd;
+    if (date >= cyc.start && date <= today) {
+      const bm = byModel[model] || (byModel[model] = { usd: 0, msgs: 0 });
+      bm.usd += usd; bm.msgs++;
+      msgCount++;
+    }
   }
   const totalUsd = Object.values(byDay).reduce((a, b) => a + b, 0);
-  const now = Date.now();
   let recent = 0;
   const days = [];
   for (let i = 13; i >= 0; i--) {
@@ -921,19 +974,47 @@ function woolSummary() {
     if (i < 7) recent += usd; // 近 7 天(含今天)
   }
   const perDay = recent / 7;
-  const remaining = Math.max(0, cfg.budgetUsd - totalUsd);
-  const daysLeft = perDay > 0 ? remaining / perDay : null;
+
+  // ---- 訂閱制:本期(這個月費週期)燒了多少、回本幾倍 ----
+  let cycleUsd = 0;
+  for (const [d, usd] of Object.entries(byDay)) if (d >= cyc.start && d <= today) cycleUsd += usd;
+  const dayMs = 86400000;
+  const dnum = s => Date.parse(s + 'T00:00:00');
+  const cycleDays = Math.max(1, Math.round((dnum(cyc.nextCharge) - dnum(cyc.start)) / dayMs));
+  const cycleElapsed = Math.min(cycleDays, Math.round((dnum(today) - dnum(cyc.start)) / dayMs) + 1); // 含今天
+  const fee = cfg.monthlyFeeUsd;
+  // 期末預估:用本期到目前為止的日均推到週期結束(本期天數還少時很浮動,前端會標「預估」)
+  const projectedUsd = cycleUsd / cycleElapsed * cycleDays;
+
+  // ---- 累計:訂閱至今總共付了幾期、總回本幾倍 ----
+  const cyclesPaid = cfg.startDate
+    ? Math.max(1, Math.round((dnum(cyc.start) - dnum(cfg.startDate)) / dayMs / 30.4) + 1)
+    : null;
+  const paidUsd = cyclesPaid != null ? cyclesPaid * fee : null;
+
   return {
     ok: true,
     scanning: woolScanning,
     updatedAt: woolLastScan ? new Date(woolLastScan).toISOString() : null,
-    totalUsd: r2(totalUsd), budgetUsd: cfg.budgetUsd, remainingUsd: r2(remaining),
+    totalUsd: r2(totalUsd),
+    monthlyFeeUsd: fee,
     twdRate: cfg.twdRate,
     perDayUsd: r2(perDay),
-    daysLeft: daysLeft != null ? Math.round(daysLeft * 10) / 10 : null,
-    depleteDate: daysLeft != null ? localDateStr(now + daysLeft * 86400000) : null,
-    startDate: cfg.startDate, expiryDate: cfg.expiryDate, firstDate,
-    msgCount: byId.size,
+    cycle: {
+      start: cyc.start, nextCharge: cyc.nextCharge,
+      days: cycleDays, elapsed: cycleElapsed,
+      usd: r2(cycleUsd),
+      roi: fee > 0 ? Math.round(cycleUsd / fee * 10) / 10 : null,
+      projectedUsd: r2(projectedUsd),
+      projectedRoi: fee > 0 ? Math.round(projectedUsd / fee * 10) / 10 : null,
+    },
+    cyclesPaid, paidUsd: paidUsd != null ? r2(paidUsd) : null,
+    lifetimeRoi: (paidUsd > 0) ? Math.round(totalUsd / paidUsd * 10) / 10 : null,
+    startDate: cfg.startDate, firstDate,
+    msgCount,
+    models: Object.entries(byModel)
+      .map(([model, v]) => ({ model, usd: r2(v.usd), msgs: v.msgs }))
+      .sort((a, b) => b.usd - a.usd),
     byDay: days,
   };
 }
@@ -1017,9 +1098,11 @@ const server = http.createServer(async (req, res) => {
       const cfgPath = path.join(ROOT, 'config.json');
       const cfg = readJsonSafe(cfgPath) || {};
       cfg.wool = cfg.wool || {};
-      if (body.budgetUsd !== undefined) {
-        const b = parseFloat(body.budgetUsd);
-        cfg.wool.budgetUsd = isFinite(b) && b > 0 ? b : 10;
+      if (body.monthlyFeeUsd !== undefined) {
+        const b = parseFloat(body.monthlyFeeUsd);
+        cfg.wool.monthlyFeeUsd = isFinite(b) && b > 0 ? b : 20; // Claude Pro 月費預設 US$20
+        delete cfg.wool.budgetUsd;   // v0.8:一桶 credit 的舊欄位已無意義,存檔時順手清掉
+        delete cfg.wool.expiryDate;  // 訂閱是每月續約,沒有「到期燒不完」這回事
       }
       if (body.twdRate !== undefined) {
         const r = parseFloat(body.twdRate);
@@ -1027,7 +1110,6 @@ const server = http.createServer(async (req, res) => {
       }
       const dateOk = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
       if (body.startDate !== undefined) cfg.wool.startDate = dateOk(body.startDate) ? body.startDate : null;
-      if (body.expiryDate !== undefined) cfg.wool.expiryDate = dateOk(body.expiryDate) ? body.expiryDate : null;
       fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
       res.writeHead(200); res.end(JSON.stringify(woolSummary()));
     } catch (e) {
@@ -1082,7 +1164,7 @@ if (require.main === module) {
   server.listen(PORT, '127.0.0.1', () => {
     console.log('AI 使用量儀表板已啟動: http://127.0.0.1:' + PORT);
     console.log('按 Ctrl+C 結束');
-    rescanWool().catch(() => {}); // 🐑 開機先把 Fable 花費掃一輪(首次全量,之後增量)
+    rescanWool().catch(() => {}); // 🐑 開機先把本機 log 花費掃一輪(首次全量,之後增量)
   });
 }
 
