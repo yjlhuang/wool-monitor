@@ -3,14 +3,18 @@
 > Claude 流量計＋薅羊毛儀表板。本機執行、免錢、零執行期依賴、可常駐桌面置頂浮窗。
 >
 > Fork 自 [danleetw/ai_usage_dashboard](https://github.com/danleetw/ai_usage_dashboard)，
-> 原作是通用的多提供商 AI 用量儀表板（電玩血條風格），本 fork 改造成「Claude 單推」版本：
-> 一眼看 Session / Weekly / Fable 三條血條，加上一張佛系的「訂閱月費回本倍率」估算表。
+> 原作是通用的多提供商 AI 用量儀表板（電玩血條風格），本 fork 改造成「Claude 為主」的版本：
+> 一眼看 Session / Weekly 血條，加上一張佛系的「訂閱月費回本倍率」估算表。
+> 另可同時盯 Codex 與 Antigravity 的配額。
 > 錢都花下去了，當然要薅好薅滿——客家美學。🐑
 
 ## 功能（相對原作的差異）
 
-- **Fable 每週配額條**：解析 `oauth/usage` 新版 `limits[]` 陣列，模型別配額（如 Fable）自動長出對應血條；
-  上游哪天拿掉這個 window，血條就自動消失，不用改程式。
+- **模型別配額條（動態長出）**：解析 `oauth/usage` 新版 `limits[]` 陣列，
+  上游回報什麼模型別／群組配額，就自動長出對應血條；拿掉就自動消失，不用改程式。
+  （歷史上這是為了 Fable 週配額做的。**Claude Pro 現在已不含 Fable**，
+  所以 Claude 卡目前不會有額外血條——這是預期，不是壞掉。
+  同一套機制現在撐的是 Antigravity 的第二桶配額，見下。）
 - **撞牆預警**:任一條用量到 **90% / 95%** 時各發一次 **Windows 原生系統通知**
   （PowerShell toast，零依賴），之後不再吵；用量掉回 85% 以下（視窗重置）才重新警戒。
   血條色階:≥70% 黃、≥85% 橘、≥92% 紅。
@@ -23,8 +27,17 @@
   期末預估、以及累計回本倍率（總燒 ÷ 總共付過的月費）。
   月費、匯率、訂閱起始日（決定帳單週期是每月幾號）皆可在 UI 設定。
   增量掃描＋快取（`wool-cache.json`），700MB log 首掃約 5 秒。
-- **版面精簡**：Claude 置頂常駐；Codex / Antigravity 收進「📦 其他提供商」摺疊區
-  （浮窗模式不顯示）；MiniMax / Kiro 預設移除（可從「＋ 新增提供商」加回）。
+- **Antigravity（Google 的 agentic IDE）配額**：無公開 usage API，改打它自己在
+  `127.0.0.1` 開的 Connect-RPC 本機服務。**需要 Antigravity IDE 開著**
+  （token 是 IDE 啟動時現產的，關掉就失效）——只在終端機跑 `agy` 是不夠的。
+  會顯示兩條週配額：`Gemini Models`（Flash / Pro）與 `Claude and GPT models`
+  （Opus / Sonnet / GPT-OSS，Google 代付的第三方額度）。
+  **後者跟你自己的 Claude Pro 訂閱無關，也不會被薅羊毛表重複計算**
+  （那張表只掃本機 Claude Code 的 jsonl）。
+  Antigravity 只有週配額，沒有 session 級或 context 資料，那幾格直接不顯示。
+- **版面精簡**：Claude 置頂常駐；其餘提供商收進「📦 其他提供商」區
+  （**預設展開**，手動收起會被記住；浮窗模式一律不顯示）；
+  MiniMax / Kiro 預設移除（可從「＋ 新增提供商」加回）。
 - **浮窗修正**：顯示縮放 ≠100%（如 125%）時的 DPI 定位 bug 修正（原本會把浮窗放到螢幕外變隱形）；
   `.bat` 改為背景啟動，不留 cmd 視窗。
 
@@ -39,6 +52,8 @@
 | 舊世代 Opus（4.1 / 4.0 / 3） | $15 | $75 |
 | Sonnet 5 / 4.6 / 4.5 / 4 | $3 | $15 |
 | Haiku 4.5 | $1 | $5 |
+| Haiku 3.5 | $0.8 | $4 |
+| Haiku 3 | $0.25 | $1.25 |
 | 認不得的新模型 | $5 | $25（當 Opus 級估） |
 
 cache 一律由 input 推導：**讀 0.1×、寫 5 分鐘 1.25×、寫 1 小時 2×**
@@ -81,6 +96,8 @@ Remove-Item webview2.zip, webview2_tmp -Recurse
 - OAuth token 只在本機後端讀取（`~/.claude/.credentials.json`），**絕不進前端、絕不外送**。
 - 伺服器只綁 `127.0.0.1:3789`。
 - `config.json`（個人設定）、`wool-cache.json`(含本機路徑)、`server.log` 都在 `.gitignore`，不會被 commit。
+- Antigravity 的 CSRF token 從本機行程表（`language_server.exe` 的啟動參數）讀取，
+  只留在記憶體、只用來打 `127.0.0.1`，**不寫檔、不印出、不回傳前端**。
 - 用量端點是非公開 API，可能隨時改版；所有解析都 graceful 失敗、沿用舊資料。
 
 ## Credit 與授權
@@ -92,4 +109,6 @@ Remove-Item webview2.zip, webview2_tmp -Recurse
 本 fork 新增的部分（薅羊毛精算、limits[] 解析、通知等）以 MIT 授權釋出。
 
 **不想讀技術細節?看 [使用指南.md](使用指南.md)（小白流,含每顆按鈕在幹嘛）。**
-進度與待辦見 [PROGRESS.md](PROGRESS.md)，最初的規格見 [施工單.md](施工單.md)。
+進度與待辦見 [PROGRESS.md](PROGRESS.md)（也是給下一個 LLM 的交接文件），
+人話版的進度與展望見 [docs/進度與展望.md](docs/進度與展望.md)，
+最初的規格見 [施工單.md](施工單.md)（**歷史文件，多數前提已作廢**）。

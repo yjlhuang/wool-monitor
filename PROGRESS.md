@@ -1,9 +1,152 @@
-# 進度筆記
+# 進度筆記 / 交接文件
 
-> 給下一個 session（或另一個帳號的 Claude）接手用的狀態快照。
-> 讀完這份＋README 就能繼續，不用重新考古。
+> 給下一個 session（或另一個帳號的 Claude）接手用。假設你是**全新開機、零上下文**。
+> 讀完這份就能繼續，不用重新考古。
 
-## 目前版本:wool-v0.8(2026-08-11)
+---
+
+## 🚀 開工必讀（照順序）
+
+1. `~/.claude/CLAUDE.md`（使用者的全域偏好；含繁體中文、比例原則、vault 橋接）
+2. **本檔**（狀態快照、地雷區、已裁決事項）
+3. [README.md](README.md)（功能與設計決策）
+4. 需要時才讀：[使用指南.md](使用指南.md)（操作面）、
+   [docs/進度與展望.md](docs/進度與展望.md)（人話版進度）、
+   [施工單.md](施工單.md)（**歷史文件，多數前提已作廢，別照著做**）
+
+## 📌 一句話定位
+
+**本機執行的 AI 用量儀表板**：盯 Claude / Codex / Antigravity 的配額血條，
+外加一張「訂閱月費回本倍率」的佛系估算表（🐑 薅羊毛）。
+
+技術形態：
+
+- **零執行期依賴**。Node 內建模組 + 單檔前端。`playwright` 只是 devDependency，常駐不需要。
+- **沒有 build step**。改 `index.html` / `server.js` 存檔、重啟 server 就生效。
+- **沒有部署**。純本機，`node server.js` 只綁 `127.0.0.1:3789`。**不要找 Vercel/線上版，沒有這種東西。**
+- 桌面浮窗是 WPF + WebView2（`floating-widget.ps1`），載入同一個頁面的 `?widget=1`。
+
+## 📸 狀態快照（2026-09-17）
+
+| 項目 | 值 |
+|---|---|
+| 工作目錄版本 | **wool-v0.8.1**（`index.html` 的 `#verTag`） |
+| 最新 commit | `fbacff3`（v0.8）— **v0.8.1 尚未 commit** |
+| 未提交檔案 | `server.js`、`index.html`、`PROGRESS.md`、`README.md`、`使用指南.md`、`施工單.md`、`docs/進度與展望.md` |
+| Claude 自動同步 | 🔴 **失敗中** — 本機憑證 2026-09-16 23:13 過期（見待辦 1） |
+| Codex 自動同步 | 🟢 正常 |
+| Antigravity 自動同步 | 🟢 正常（前提：IDE 開著） |
+| MiniMax / Kiro | 預設已移除，可從「＋新增提供商」加回 |
+
+## 💣 地雷區（這個專案特有，踩過才知道）
+
+1. **`resets_at` 每次請求都重生**（微秒尾碼都在變）。**永遠不要拿它當週期 key**，
+   否則通知會重複觸發或永不觸發。
+2. **`limits[]` 的 `is_active: false`** 時 `resets_at` 是漂移佔位值
+   （claude.ai 顯示 "Starts when a message is sent"），不能渲染成倒數。
+3. **改計價規則必須把 `WOOL_CACHE_VER` +1**，否則 jsonl 的 mtime/size 沒變會沿用舊價，
+   你會以為改壞了但其實是快取。
+4. **Antigravity 的 token 是 IDE 現產的**，IDE 關掉就失效。`agy.exe` 的命令列是空的，
+   拿不到 token；**能問到數字的只有 IDE 那支 `language_server.exe`**。
+5. **PowerShell 腳本含巢狀引號一律走 `-EncodedCommand`**（base64 UTF-16LE）。
+   `-Command` 會被 cmd/PowerShell 兩層跳脫吃掉字元（toast 的 XML 引號踩過一次，
+   `Get-CimInstance -Filter` 又踩過一次）。
+6. **`execSync` 呼叫 PowerShell 要加 `stdio: ['ignore','pipe','ignore']`**，
+   否則 CLIXML progress 會噴進伺服器 console。
+7. **WebView2 樹裡有些子視窗原生自帶 `WS_EX_TRANSPARENT`**。滑鼠穿透關閉時
+   一律清 bit 會把浮窗弄到不渲染＋凍住；只能還原「自己加過的那些」。
+8. **使用者的 PowerShell 指令若含 `floating-widget` 字串**，`Get-CimInstance` 過濾會匹配到自己，
+   要排除 `$PID`（踩過：把自己 kill 掉 exit 255）。
+9. **螢幕是 1920×1080 @ 125% 縮放**（邏輯 1536×864）。WinForms 的 WorkingArea 是實體 px，
+   直接餵 WPF 的 Left（邏輯單位）會把浮窗定位到螢幕外變隱形。
+10. **CSS `zoom` 只能掛 `#rows` / `#woolBox`**，掛 root 會弄壞 dialog 置中。
+11. **編輯檔案時注意編碼**：用腳本改檔一律明確指定 UTF-8，繁體中文不要混進簡體字。
+12. **UI state 只能有一個權威寫入者**。多個事件來源搶寫同一格會導致高亮亂跳且極難 debug。
+13. **上游端點全是非公開 API**，隨時可能改格式或改驗證方式（v0.8.1 修的 Antigravity 就是）。
+    所有解析都要 graceful 失敗、沿用舊資料，不可整個崩掉。
+
+## 🗣️ 使用者的偏好與溝通方式
+
+- **一律繁體中文**。看得懂英文，但預設用中文。
+- **比例原則**：低風險（文件、註解、明顯的單點修正）直接做完再回報，不要開顧問會議；
+  高風險（不可逆、對外、動到使用者看得到的行為）才走完整驗證。
+- **回報「完成」前要在瀏覽器實際驗證最終渲染結果**，不是只看程式碼。沒驗的就照實說沒驗。
+- **只有明講才 commit**。不要自作主張存檔或推上去。
+- 測試用的 stub / 假資料 / debug log **測完必須移除**，絕不可留進 commit。
+- 改版記得升 `#verTag` 的版本號。
+
+## ➡️ 接手後建議的第一步
+
+先看「待辦」第 1 項（Claude 憑證過期）——那是儀表板最核心的功能目前處於降級狀態。
+其次是把 v0.8.1 這批未提交的改動存檔。
+
+---
+
+# 版本沿革
+
+## 目前版本:wool-v0.8.1(2026-09-17)
+
+> ⚠️ v0.8.1 目前**尚未 commit**，只存在工作目錄；`git log` 最新一筆是 `fbacff3`（v0.8）。
+
+### v0.8.1 內容:Antigravity 改走 IDE 的 language_server
+
+**症狀**:Antigravity 卡在「未偵測到執行中的 agy CLI」/ 查詢失敗,讀不到任何數字。
+
+**原因**:v0.4 那套「agy CLI 的本機 Connect-RPC 不需要 CSRF token」的前提**已經過期**。
+實測 2026-09-17,agy CLI(9233)和 Antigravity IDE 的 language_server(8843)兩邊都回
+`401 {"code":"unauthenticated","message":"missing CSRF token"}`。
+
+**修法**:
+- token 在 `language_server.exe` 的啟動參數 `--csrf_token` 裡(Antigravity 主行程每次啟動
+  用 `crypto.randomUUID()` 現產,關掉 IDE 就失效),header 名稱是 **`x-codeium-csrf-token`**
+  (Antigravity 的 LS 沿用 Codeium 的實作;從 `resources/bin/language_server.exe` 裡撈到字串)。
+- `findAgyListenPorts()` → **`findAgyEndpoints()`**,回傳 `[{ port, csrf }]`:
+  用 `Get-CimInstance Win32_Process` 抓 `agy.exe` / `language_server.exe` 的完整命令列
+  (**wmic 在新版 Windows 已移除,不要用**),再用 netstat 把 pid 對回 127.0.0.1 的 LISTENING port。
+  **token 只跟自己那個 pid 的 port 配對**,不可跨行程混用。
+- `language_server.exe` 也可能是 Windsurf/Codeium 外掛的,所以只收命令列含 `antigravity` 的那支。
+- PowerShell 腳本含巢狀引號,一律走 `-EncodedCommand`(base64 UTF-16LE);
+  `execSync` 加 `stdio:['ignore','pipe','ignore']`,否則 PowerShell 的 CLIXML progress
+  會噴進伺服器 console。
+- **`agy.exe` 自己的命令列是空的,拿不到 token**,所以實際問得到數字的是 IDE 那支。
+  兩者共用同一個 Google 帳號配額,所以**開著 Antigravity IDE 就夠了,不必另外開終端機跑 agy**。
+  錯誤文案已跟著改(不再叫使用者去終端機跑 agy)。
+
+**同批附帶改動(2026-09-17)**:
+- `PROVIDER_CACHE_MS = { antigravity: 20000 }`：`cachedFetch()` 改成可按 provider 給不同快取壽命。
+  預設 `CACHE_MS`（3 分）是為了不撞官方端點限流，但 antigravity 走的是 127.0.0.1 本機 RPC，
+  沒限流問題，快取 3 分鐘會跟 IDE 自己顯示的數字對不起來，改 20s 跟前端輪詢（60s）同步。
+- 前端 `minorOpen` 預設改成 **true**（主人開始用別家了），並存進 localStorage `aiDash.minorOpen.v1`；
+  手動收起會被記得。浮窗不受影響（`.widget-mode .minor` 是 `display:none`）。
+
+- **不支援的欄位直接不渲染**(主人 2026-09-17 裁決)：Antigravity 卡上「目前使用率／
+  下次重生／CONTEXT」三格不再畫「無法讀取」占位。區分標準：
+  - session：上游回 `session: null` = 明講沒這種資料 → `sess.unsupported` → 不畫。
+  - context：伺服器只幫 claude/codex 掛 `context` 陣列（server.js:1130-1131）。
+    **根本沒這個欄位 = 不支援（不畫）；有陣列但是空的 = 支援但無活躍 session（仍顯示無法讀取）**。
+    改這塊前先確認 Codex 的 CONTEXT 欄沒被誤殺。
+- 圈起來的 `Claude and GPT models` extra bar **主人裁決留著**：那是 Antigravity 自己的
+  第二桶配額（bucketId `3p-weekly`，Google 代付的第三方模型），**跟主人自己的 Claude Pro
+  訂閱無關、也不會跟薝羊毛表重複計算**（薝羊毛表只掃本機 Claude Code 的 jsonl）。
+  在 Antigravity 裡切成 Claude/GPT 模型時這條才會動。
+
+**實測結果**(2026-09-17,IDE 開著):
+```
+groups[0] Gemini Models          remainingFraction 0.543 → 已用 45.7%,週重生 9/24
+groups[1] Claude and GPT models  remainingFraction 1     → 已用  0.0%(當 extra bar)
+```
+→ 待辦 2 的「教育版查不到配額」疑慮**排除**,查得到。
+
+**注意**:
+- 兩個 bucket 的 `resetTime` 各自不同,而且每次請求都會漂(滾動視窗),
+  跟 Claude `limits[]` 的 `is_active:false` 佔位值一樣**不要拿來當週期 key**。
+- **IDE 剛啟動時 language server 可能先回一份 `remainingFraction: 1` 的快取(卡片顯示 0%)**,
+  過一陣子才變成真實數字——不是 bug，不用追。
+- IDE 關掉 → token 消失 → 這張卡會退回「未偵測到」,這是預期行為。
+- `normalizeAntigravityQuota()` 只取「第一個非 Gemini group」當 extra;目前上游就兩組,
+  未來若多出第三組會被靜靜丟掉,屆時要改成 map 全部 groups。
+
+## 前一版:wool-v0.8(2026-08-11)
 
 ### v0.8 內容:分母換成「Pro 月費」,語意翻轉
 
@@ -170,16 +313,51 @@
 
 ## 待辦
 
-1. ~~浮窗透明度調整~~ ~~區塊調小~~ ~~收進側邊~~ → v0.5 完成。
-2. Antigravity:主人是**教育版 Pro**，可能根本查不到配額（教育版網頁也不顯示用量）。
-   等主人跑 `agy` 實測,若查不到把錯誤文案改誠實一點（「教育版不提供用量資訊」）。
-3. （遠期）帳號切換:施工單的擴充位,雙帳號各自快照。
+### 1. 🔴 Claude 憑證過期,自動同步降級中（**待老師裁決**）
+
+2026-09-17 實測:`~/.claude/.credentials.json` 的 `claudeAiOauth.expiresAt` 是
+**2026-09-16 23:13**,已過期 → `fetchClaude()` 在 server.js:200 直接回 `CLAUDE_TOKEN_EXPIRED`,
+Claude 卡退回手動值。薅羊毛表不受影響(掃本機 log,不需要授權)。
+
+**尚未查證**的部分:該檔案該由誰刷新。目前錯誤文案寫「執行任一 claude 指令讓它自動刷新」,
+那是針對 CLI 版寫的;老師現在用桌面版,**是否也會刷新同一個檔案沒有驗證過**,不要當成事實。
+
+三個方向(都還沒做):
+
+1. 不改程式,過期時手動跑一次 CLI 版刷新。
+2. 用檔案裡的 refresh token 自動續期——**會動到授權流程,風險較高,必須老師點頭**。
+3. 只改文案,不要斷言「跑 claude 指令就會好」。
+
+### 2. v0.8.1 尚未 commit
+
+`server.js`、`index.html`、`PROGRESS.md`、`README.md`、`使用指南.md`、`施工單.md`、
+`docs/進度與展望.md` 都還在工作目錄。老師說了才 commit。
+
+### 3. `normalizeAntigravityQuota()` 只吃兩組 group
+
+上游目前剛好兩組(Gemini / Claude+GPT),正常。多出第三組會被**靜靜丟掉且不報錯**。
+等真的發生再改成 map 全部 groups。
+
+### 4. （遠期）帳號切換
+
+施工單的擴充位,雙帳號各自快照。目前薅羊毛表是多帳號混計。
+
+### ✅ 已關閉
+
+- ~~浮窗透明度調整 / 區塊調小 / 收進側邊~~ → v0.5 完成。
+- ~~Antigravity 教育版可能查不到配額~~ → 2026-09-17 實測查得到。
+- ~~「Antigravity 數字對不上」~~ → 2026-09-17 老師回報後確認可以了。
+  過程中排除了一個可能成因(本機 RPC 卻套 3 分鐘快取,已改 20 秒),
+  但**實際成因未查明**,再發生需重新調查。
 
 ## 執行/測試備忘
 
 - 開伺服器:`start.bat` 或 `node server.js`（port 3789，只綁 127.0.0.1）。
 - 浮窗:`floating-widget.bat`（Alt+F4 關）。DLL 抓法見 README。
-- 驗證 API:`GET /api/usage`（Claude 含 extra=Fable）、`GET /api/wool`。
+- 驗證 API:`GET /api/usage`、`GET /api/wool`。
+  `usage` 的 `providers.<id>.extra[]` 是動態模型別/群組配額
+  （Claude 目前無；Antigravity 有 `Claude and GPT models`）。
+- 驗證 Antigravity 要先確認 IDE 開著;快取 20s（`PROVIDER_CACHE_MS`）。
 - 頁面右上有版本號 `wool-vX.Y`（`index.html` 的 `#verTag`），改版記得升,
   部署疑義一眼裁決。
 - 上游 repo:https://github.com/danleetw/ai_usage_dashboard（**無 LICENSE**，
