@@ -38,8 +38,8 @@ const SERR = {
     KIRO_NOT_LOGGED_IN: '找不到 kiro-cli 執行檔,請確認已安裝並登入',
     KIRO_CLI_FAILED: '呼叫 kiro-cli 失敗: {msg}',
     KIRO_FORMAT_UNEXPECTED: 'kiro-cli /usage 回應格式不符預期',
-    ANTIGRAVITY_NOT_RUNNING: '未偵測到執行中的 Antigravity CLI(agy);請在終端機執行 agy 並保持該視窗開啟',
-    ANTIGRAVITY_PROBE_FAILED: '偵測到 agy CLI 執行中,但查詢用量失敗或回應格式不符預期',
+    ANTIGRAVITY_NOT_RUNNING: '未偵測到執行中的 Antigravity;請打開 Antigravity IDE(或在終端機跑 agy)並保持開啟',
+    ANTIGRAVITY_PROBE_FAILED: '偵測到 Antigravity 執行中,但查詢用量失敗(可能是 CSRF token 拿不到,或回應格式改了)',
     STALE_BACKOFF: '退避中(避免觸發限流),沿用舊資料',
     UNEXPECTED_EXCEPTION: '發生非預期錯誤: {msg}',
   },
@@ -63,8 +63,8 @@ const SERR = {
     KIRO_NOT_LOGGED_IN: 'kiro-cli executable not found — please make sure it is installed and logged in',
     KIRO_CLI_FAILED: 'Failed to run kiro-cli: {msg}',
     KIRO_FORMAT_UNEXPECTED: 'kiro-cli /usage response did not match expectations',
-    ANTIGRAVITY_NOT_RUNNING: 'No running Antigravity CLI (agy) detected — run `agy` in a terminal and keep it open',
-    ANTIGRAVITY_PROBE_FAILED: 'agy CLI is running, but fetching usage failed or the response did not match expectations',
+    ANTIGRAVITY_NOT_RUNNING: 'No running Antigravity detected — open the Antigravity IDE (or run `agy` in a terminal) and keep it open',
+    ANTIGRAVITY_PROBE_FAILED: 'Antigravity is running, but fetching usage failed (CSRF token unavailable, or the response shape changed)',
     STALE_BACKOFF: 'Backing off to avoid rate limits — using cached data',
     UNEXPECTED_EXCEPTION: 'Unexpected error: {msg}',
   },
@@ -588,60 +588,106 @@ async function fetchKiro() {
   return { ok: true, ...norm };
 }
 
-// ---------- Antigravity(Google agentic CLI「agy」;無公開 usage API,借用 CLI 自己的本機 loopback 服務) ----------
-// 2026-07-04 探測過程(細節見 開發計畫.md):agy.exe 執行檔本身是加殼過的封閉二進位、雲端 usage 端點
+// ---------- Antigravity(Google 的 agentic IDE / CLI「agy」;無公開 usage API,借用它自己的本機 loopback 服務) ----------
+// 2026-07-04 探測過程(細節見 PROGRESS.md):agy.exe 執行檔本身是加殼過的封閉二進位、雲端 usage 端點
 // (daily-cloudcode-pa.googleapis.com)的認證憑證存在 Windows 認證管理員裡且是不透明編碼,
-// 兩條路都撞牆。後來在開源專案 steipete/CodexBar(docs/antigravity.md)裡找到:agy CLI 執行期間會在
-// 127.0.0.1 開一個「自己就有 quota 資料」的 Connect-RPC 本機服務,不需要 CSRF token(這點跟
-// Antigravity 桌面 App/IDE 版本不同),已實機驗證此法可行且與 CLI 內 `/model` 畫面數字一致:
+// 兩條路都撞牆。後來在開源專案 steipete/CodexBar(docs/antigravity.md)裡找到:Antigravity 執行期間會在
+// 127.0.0.1 開一個「自己就有 quota 資料」的 Connect-RPC 本機服務:
 //   POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
-//   headers: Content-Type: application/json, Connect-Protocol-Version: 1  body: {}
+//   headers: Content-Type: application/json, Connect-Protocol-Version: 1,
+//            x-codeium-csrf-token: <token>                        body: {}
 //   回應:{ response: { groups: [ { displayName, buckets: [{ bucketId, window, remainingFraction, resetTime }] } ] } }
-// 限制:此服務只在 agy CLI 行程存活時才會開著(關閉終端機視窗就沒了),故偵測不到時只能提示
-// 使用者「請先在終端機執行 agy 保持連線」,不會主動幫使用者背著啟動一個 agy 行程(避免意外side effect
-// /行程生命週期管理複雜化,超出這個零依賴小工具的範圍)。目前只在 Windows 實機驗證過;macOS/Linux
-// 的 ps/lsof 分支沿用 CodexBar 文件裡的位置與指令,未實機測試。
-function findAgyListenPorts() {
+//
+// ⚠️ 2026-09-17 更新:CodexBar 文件裡「agy CLI 不需要 CSRF token(跟桌面 App/IDE 不同)」的說法
+// **已經過期**,現在兩邊不帶 token 都回 401 {"code":"unauthenticated","message":"missing CSRF token"}。
+// token 在 language_server.exe 的啟動參數 --csrf_token 裡(Antigravity 主行程每次啟動用
+// crypto.randomUUID() 現產,IDE 關掉就失效),驗證的 header 名稱是 x-codeium-csrf-token
+// (Antigravity 的 language server 沿用 Codeium 的實作)。token 只留在本機記憶體、只拿來打 127.0.0.1,
+// 不寫檔、不印出、不回傳前端。
+//
+// 限制:agy.exe 自己的命令列是空的,拿不到 token,所以**實際問得到數字的是 IDE 那支 language_server**。
+// 兩者共用同一個 Google 帳號配額,故偵測不到時提示使用者「把 Antigravity IDE 開著」即可,
+// 不會主動幫使用者背著啟動行程(避免意外 side effect / 行程生命週期管理複雜化,超出這個零依賴小工具的範圍)。
+// 已在 Windows 實機驗證與 IDE 內顯示同源;macOS/Linux 的 ps/lsof 分支沿用 CodexBar 文件,未實機測試。
+// 另注意:IDE 剛啟動時 language server 可能先回一份 remainingFraction=1 的快取(顯示 0%),
+// 過一陣子才變成真實數字——不是 bug,不用追。
+
+function extractCsrf(cmdline) {
+  // 只收 UUID 形狀:萬一 --csrf_token 是最後一個參數或值是空的,\S+ 會把下一個旗標當成 token
+  // 送出去;寧可比對不到回 null(不帶 header、誠實吃 401),也不要送垃圾。
+  const m = /--csrf_token[=\s]+"?([0-9a-fA-F][0-9a-fA-F-]{15,})"?/.exec(cmdline || '');
+  return m ? m[1] : null;
+}
+
+// 回傳 [{ port, csrf }];csrf 可能是 null(拿不到 token 的行程,仍保留讓它試一次)
+function findAgyEndpoints() {
   try {
     if (os.platform() === 'win32') {
-      const tasklistOut = execSync('tasklist /FI "IMAGENAME eq agy.exe" /FO CSV /NH', { encoding: 'utf8', timeout: 3000 });
-      const pids = [...tasklistOut.matchAll(/"agy\.exe","(\d+)"/g)].map(m => m[1]);
-      if (!pids.length) return [];
-      const netstatOut = execSync('netstat -ano -p TCP', { encoding: 'utf8', timeout: 3000 });
-      const ports = new Set();
+      // 用 Get-CimInstance 取完整命令列(wmic 在新版 Windows 已被移除,不能依賴)。
+      // 腳本含巢狀引號,一律走 -EncodedCommand(base64 UTF-16LE),避免 cmd/PowerShell 兩層跳脫吃字元。
+      const psScript = 'Get-CimInstance Win32_Process -Filter "Name=\'agy.exe\' or Name=\'language_server.exe\'"'
+        + ' | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress';
+      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+      let list = null;
+      try {
+        const out = execSync('powershell -NoProfile -NonInteractive -EncodedCommand ' + encoded,
+          { encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        list = JSON.parse(out);
+      } catch { return []; }
+      if (!list) return [];
+      if (!Array.isArray(list)) list = [list];
+      const byPid = new Map();
+      for (const proc of list) {
+        const cmd = proc.CommandLine || '';
+        // language_server.exe 也可能是 Windsurf/Codeium 外掛的,只收 Antigravity 那一支
+        const isAgy = /agy\.exe/i.test(cmd);
+        if (!isAgy && !/antigravity/i.test(cmd)) continue;
+        byPid.set(String(proc.ProcessId), extractCsrf(cmd));
+      }
+      if (!byPid.size) return [];
+      const netstatOut = execSync('netstat -ano -p TCP', { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      const seen = new Set();
+      const endpoints = [];
       for (const line of netstatOut.split('\n')) {
         const m = line.match(/^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
-        if (m && pids.includes(m[2])) ports.add(m[1]);
+        if (!m || !byPid.has(m[2])) continue;
+        const key = m[2] + ':' + m[1];
+        if (seen.has(key)) continue;
+        seen.add(key);
+        endpoints.push({ port: m[1], csrf: byPid.get(m[2]) });
       }
-      return [...ports];
+      return endpoints;
     }
-    // macOS/Linux:未實機驗證,沿用 CodexBar 文件記載的做法
-    const psOut = execSync('ps -ax -o pid=,command=', { encoding: 'utf8', timeout: 3000 });
-    const pids = psOut.split('\n')
-      .filter(l => /(^|[\\/])agy(\s|$)/.test(l.trim()))
-      .map(l => l.trim().split(/\s+/)[0]);
-    const ports = new Set();
-    for (const pid of pids) {
+    // macOS/Linux:未實機驗證,沿用 CodexBar 文件記載的做法;ps 的 command 欄已含完整參數
+    const psOut = execSync('ps -ax -o pid=,command=', { encoding: 'utf8', timeout: 5000 });
+    const procs = psOut.split('\n')
+      .map(l => l.trim())
+      .filter(l => /(^|[\\/])agy(\s|$)/.test(l) || (/language_server/.test(l) && /antigravity/i.test(l)))
+      .map(l => ({ pid: l.split(/\s+/)[0], csrf: extractCsrf(l) }));
+    const endpoints = [];
+    for (const { pid, csrf } of procs) {
       try {
         const lsofOut = execSync(`lsof -nP -iTCP -sTCP:LISTEN -a -p ${pid}`, { encoding: 'utf8', timeout: 3000 });
-        for (const m of lsofOut.matchAll(/:(\d+)\s+\(LISTEN\)/g)) ports.add(m[1]);
+        for (const m of lsofOut.matchAll(/:(\d+)\s+\(LISTEN\)/g)) endpoints.push({ port: m[1], csrf });
       } catch { /* 該 pid 查不到就跳過 */ }
     }
-    return [...ports];
+    return endpoints;
   } catch { return []; }
 }
 
 // 呼叫本機 agy 的 Connect-RPC 服務;loopback 自簽憑證,只在 127.0.0.1 才允許略過憑證驗證
-function postAgyLocalRpc(port, rpcPath, timeoutMs = 5000) {
+function postAgyLocalRpc(port, rpcPath, csrf = null, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const body = '{}';
+    const headers = {
+      'Content-Type': 'application/json',
+      'Connect-Protocol-Version': '1',
+      'Content-Length': Buffer.byteLength(body),
+    };
+    if (csrf) headers['x-codeium-csrf-token'] = csrf;
     const req = https.request({
       host: '127.0.0.1', port, path: rpcPath, method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Connect-Protocol-Version': '1',
-        'Content-Length': Buffer.byteLength(body),
-      },
+      headers,
       rejectUnauthorized: false,
       timeout: timeoutMs,
     }, (res) => {
@@ -683,13 +729,13 @@ function normalizeAntigravityQuota(json) {
 }
 
 async function fetchAntigravity() {
-  const ports = findAgyListenPorts();
-  if (!ports.length) return { ok: false, errCode: 'ANTIGRAVITY_NOT_RUNNING' };
+  const endpoints = findAgyEndpoints();
+  if (!endpoints.length) return { ok: false, errCode: 'ANTIGRAVITY_NOT_RUNNING' };
   let lastErrCode = 'ANTIGRAVITY_PROBE_FAILED';
-  for (const port of ports) {
+  for (const { port, csrf } of endpoints) {
     let raw;
     try {
-      raw = await postAgyLocalRpc(port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary');
+      raw = await postAgyLocalRpc(port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', csrf);
     } catch { continue; }
     let json;
     try { json = JSON.parse(raw); } catch { continue; }
@@ -1025,12 +1071,17 @@ function woolSummary() {
 const CACHE_MS = 180000;
 const FAIL_BACKOFF_MS = 120000;
 const STALE_MS = 1800000;
+// 每個 provider 的快取壽命:預設 CACHE_MS(3 分)是為了不去撞官方端點的限流。
+// antigravity 走的是 127.0.0.1 的本機 RPC,沒有限流問題,快取太久反而會跟
+// IDE 自己顯示的數字對不起來(2026-09-17 主人回報),改成跟前端輪詢同步。
+const PROVIDER_CACHE_MS = { antigravity: 20000 };
 const upstreamCache = {};
 async function cachedFetch(key, fn) {
   const now = Date.now();
+  const ttl = PROVIDER_CACHE_MS[key] || CACHE_MS;
   const c = upstreamCache[key];
   if (c) {
-    if (c.result.ok && now - c.at < CACHE_MS) return c.result; // 成功快取仍新鮮
+    if (c.result.ok && now - c.at < ttl) return c.result; // 成功快取仍新鮮
     if (c.lastFail && now - c.lastFail < FAIL_BACKOFF_MS) {    // 才失敗過,退避中,先不重試
       return c.result.ok
         ? { ...c.result, stale: true, staleErrCode: 'STALE_BACKOFF' }
