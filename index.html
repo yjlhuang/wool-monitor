@@ -419,7 +419,7 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
 <header>
   <h1><span data-i18n="pageTitle">AI 使用量儀表板</span> <span class="pix">▮▮▮▯▯</span></h1>
   <span id="status"><span class="dot" id="statusDot"></span><span id="statusText" data-i18n="statusConnecting">連線中…</span></span>
-  <span id="verTag">wool-v0.8</span>
+  <span id="verTag">wool-v0.8.1</span>
   <span class="spacer"></span>
   <button id="langToggle" type="button"></button>
   <button id="addBtn" class="primary" data-i18n="addProviderBtn">＋ 新增提供商</button>
@@ -831,7 +831,9 @@ function effective(p) {
     // 上游明確回報「此提供商沒有 session 級資料」(如 Antigravity 只有週配額,無 5 小時層級)。
     // 2026-07-04 使用者確認:這種情況不要用手動預設值冒充,改顯示無法讀取(跟 Context 一致),
     // 即使代價是手動值從此被永久蓋過、無法在這個欄位自行手動追蹤。
-    sess.usedPct = null; sess.resetsAt = null; sess.src = 'auto';
+    // 2026-09-17 主人裁決:上游明講「沒這種資料」就不要再畫一格「無法讀取」佔位,
+    // 直接不渲染(跟「一時讀不到」區分開來——後者仍然要顯示無法讀取)。
+    sess.usedPct = null; sess.resetsAt = null; sess.src = 'auto'; sess.unsupported = true;
   } else if (auto && auto.session) {
     if (auto.session.usedPct != null) { sess.usedPct = auto.session.usedPct; sess.src = 'auto'; }
     if (auto.session.resetsAt) { const t = Date.parse(auto.session.resetsAt); if (!isNaN(t)) sess.resetsAt = t; }
@@ -867,8 +869,12 @@ function effective(p) {
   if (rawAuto && Array.isArray(rawAuto.context) && rawAuto.context.length) {
     ctx = { sessions: rawAuto.context };
   }
+  // 伺服器只會幫「有本機 session 記錄可掃」的 provider 掛上 context 陣列(claude/codex);
+  // 根本沒這個欄位 = 該 provider 不支援 context,與「有陣列但是空的」(支援但無活躍
+  // session,例如 Codex)意義不同——前者直接不畫,後者仍顯示無法讀取。
+  const ctxUnsupported = !!(auto && !Array.isArray(auto.context));
   return {
-    sess, lt, ctx, extra,
+    sess, lt, ctx, extra, ctxUnsupported,
     autoState: p.autoKey ? (a ? (a.ok ? 'ok' : 'err') : 'wait') : 'none',
     autoErr: (a && !a.ok) ? a.error : null,
   };
@@ -1038,7 +1044,11 @@ function renderMini() {
   tick();
 }
 
-let minorOpen = false; // 摺疊區開合狀態要跨 renderAll 存活(每次輪詢都會整塊重畫)
+// 摺疊區開合狀態要跨 renderAll 存活(每次輪詢都會整塊重畫),並跨重整記住。
+// 2026-09-17:主人開始用別家了,預設改成展開;手動收起會被記得。
+// (浮窗不受影響——.widget-mode .minor 是 display:none,根本不渲染。)
+const MINOR_OPEN_KEY = 'aiDash.minorOpen.v1';
+let minorOpen = localStorage.getItem(MINOR_OPEN_KEY) !== '0';
 function renderAll() {
   if (isMiniMode) { renderMini(); return; }
   const box = $('#rows');
@@ -1066,9 +1076,9 @@ function renderAll() {
         </div>
       </div>
       <div class="metrics">
-        ${hpCell(t('labelCurrentUsage'), e.sess.usedPct, e.sess.src)}
-        ${cdCell(t('labelNextRespawn'), e.sess.resetsAt, e.sess.windowMin, e.sess.src, p.id, 'session', e.sess.inactive)}
-        ${ctxCell(e.ctx)}
+        ${e.sess.unsupported ? '' : hpCell(t('labelCurrentUsage'), e.sess.usedPct, e.sess.src)}
+        ${e.sess.unsupported ? '' : cdCell(t('labelNextRespawn'), e.sess.resetsAt, e.sess.windowMin, e.sess.src, p.id, 'session', e.sess.inactive)}
+        ${e.ctxUnsupported ? '' : ctxCell(e.ctx)}
         ${hpCell(t('usageOfLabel', { label: ltLabelText(e.lt.label) }), e.lt.usedPct, e.lt.src)}
         ${cdCell(t('respawnOfLabel', { label: ltLabelText(e.lt.label) }), e.lt.resetsAt, e.lt.windowMin, e.lt.src, p.id, 'longterm', e.lt.inactive)}
         ${e.extra.map((x, i) => {
@@ -1092,7 +1102,10 @@ function renderAll() {
       <div class="minor-rows">${minor.map(([p, i]) => rowHtml(p, i)).join('')}</div>
     </details>` : '');
   const mb = $('#minorBox');
-  if (mb) mb.addEventListener('toggle', () => { minorOpen = mb.open; });
+  if (mb) mb.addEventListener('toggle', () => {
+    minorOpen = mb.open;
+    try { localStorage.setItem(MINOR_OPEN_KEY, minorOpen ? '1' : '0'); } catch { /* 無痕模式就算了 */ }
+  });
 
   box.querySelectorAll('[data-edit]').forEach(b =>
     b.addEventListener('click', () => openDialog(b.dataset.edit)));
