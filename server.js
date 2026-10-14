@@ -855,21 +855,28 @@ function scanCodexContext() {
 // 佛系粗估:只算 Claude Code 本機 log,不含 claude.ai 網頁端;雙帳號的 log 混在同一目錄,一併計入。
 const readline = require('readline');
 const WOOL_CACHE_PATH = path.join(ROOT, 'wool-cache.json');
-const WOOL_CACHE_VER = 2; // 計價規則/快取欄位改版時 +1,強制整包重掃(否則 mtime 沒變的檔會沿用舊價)
-// [模型比對, input, output](USD / 1M tokens,Anthropic 第一方牌價)。
-// cache 一律由 input 推導:讀 0.1×、寫 5 分鐘 1.25×、寫 1 小時 2×(和舊版 Fable 的 $1/$12.5/$20 完全一致)。
+const WOOL_CACHE_VER = 3; // 計價規則/快取欄位改版時 +1,強制整包重掃(否則 mtime 沒變的檔會沿用舊價)
+// [模型比對, input, output, cache 讀取, 分段價?](USD / 1M tokens,Anthropic 官方價目表)。
+// 寫入:5 分鐘 1.25×、1 小時 2×(所有模型都一樣,由 input 推導)。讀取每個模型不同,直接寫死。
+// 分段價 [門檻 tokens, input, output, cache 讀取]:Haiku 5.5 的 prompt 超過 10 萬 token 時改用高價檔。
 // 由上往下第一個命中的為準,所以「新世代 Opus」要排在「泛用 Opus」前面。
+// 2026-10-14 依官方價目表(主表 + Additional models)更新。Haiku 3 / Sonnet 3.5、3.7 未在截圖中,沿用舊值。
 const WOOL_MODEL_PRICE = [
-  [/^claude-(fable|mythos)-/, 10, 50],           // Fable 5 / Mythos 5
-  [/^claude-opus-(5|4-8|4-7|4-6|4-5)/, 5, 25],   // Opus 5 / 4.8 / 4.7 / 4.6 / 4.5
-  [/^claude-opus-/, 15, 75],                     // 舊世代 Opus(4.1 / 4.0 / 3)
-  [/^claude-sonnet-/, 3, 15],                    // Sonnet 5 / 4.6 / 4.5 / 4(Sonnet 5 另有 $2/$10 促銷價,這裡取牌價,寧可高估)
-  [/^claude-3-(5|7)-sonnet/, 3, 15],
-  [/^claude-haiku-4-5/, 1, 5],
-  [/^claude-3-5-haiku/, 0.8, 4],
-  [/^claude-3-haiku/, 0.25, 1.25],
+  [/^claude-(fable|mythos)-5-1/, 10, 50, 0.25],              // Fable 5.1 / Mythos 5.1
+  [/^claude-(fable|mythos)-/, 10, 50, 1],                    // Fable 5 / Mythos 5(舊款,讀取 $1)
+  [/^claude-opus-5-5/, 4, 20, 0.20],                          // Opus 5.5
+  [/^claude-opus-(5|4-8|4-7|4-6|4-5)/, 5, 25, 0.5],          // Opus 5 / 4.8 / 4.7 / 4.6 / 4.5
+  [/^claude-opus-/, 15, 75, 1.5],                            // 舊世代 Opus(4.1 / 4.0 / 3)
+  [/^claude-sonnet-5-5/, 2, 10, 0.10],                       // Sonnet 5.5
+  [/^claude-sonnet-5/, 2, 10, 0.20],                         // Sonnet 5
+  [/^claude-sonnet-/, 3, 15, 0.3],                           // Sonnet 4.6 / 4.5 / 4
+  [/^claude-3-(5|7)-sonnet/, 3, 15, 0.3],
+  [/^claude-haiku-5-5/, 0.10, 0.50, 0.01, [100000, 0.50, 2.50, 0.05]], // Haiku 5.5
+  [/^claude-haiku-4-5/, 1, 5, 0.1],
+  [/^claude-3-5-haiku/, 0.8, 4, 0.08],
+  [/^claude-3-haiku/, 0.25, 1.25, 0.025],
 ];
-const WOOL_PRICE_FALLBACK = [5, 25]; // 認不得的新模型:當 Opus 級估
+const WOOL_PRICE_FALLBACK = { in: 5, out: 25, read: 0.5 }; // 認不得的新模型:當 Opus 級估
 const WOOL_RESCAN_MS = 300000; // 增量重掃間隔 5 分鐘
 
 let woolCache = null;   // { v, files: { [路徑]: { mtimeMs, size, msgs: [[messageId, 'YYYY-MM-DD', usd, model], ...] } } }
@@ -886,22 +893,28 @@ function loadWoolCache() {
   return woolCache;
 }
 
-function woolPrice(model) {
-  for (const [re, input, output] of WOOL_MODEL_PRICE) if (re.test(model)) return [input, output];
+// promptTok = 本則 input 側總 token(含 cache 讀寫),分段價以此判斷(假設官方門檻以整個 prompt 計)
+function woolPrice(model, promptTok) {
+  for (const [re, input, output, read, tier] of WOOL_MODEL_PRICE) {
+    if (!re.test(model)) continue;
+    if (tier && promptTok > tier[0]) return { in: tier[1], out: tier[2], read: tier[3] };
+    return { in: input, out: output, read };
+  }
   return WOOL_PRICE_FALLBACK;
 }
 
 function woolMsgCost(model, u) {
-  const [pIn, pOut] = woolPrice(model);
   const cc = u.cache_creation;
   // 有 5m/1h 細分就分開計價;沒有就整包當 5 分鐘 cache(便宜檔,寧可低估不高估)
   const c1h = cc ? (cc.ephemeral_1h_input_tokens || 0) : 0;
   const c5m = cc ? (cc.ephemeral_5m_input_tokens || 0) : (u.cache_creation_input_tokens || 0);
-  return ((u.input_tokens || 0) * pIn
-        + (u.output_tokens || 0) * pOut
-        + (u.cache_read_input_tokens || 0) * pIn * 0.1
-        + c5m * pIn * 1.25
-        + c1h * pIn * 2) / 1e6;
+  const read = u.cache_read_input_tokens || 0;
+  const p = woolPrice(model, (u.input_tokens || 0) + read + c5m + c1h);
+  return ((u.input_tokens || 0) * p.in
+        + (u.output_tokens || 0) * p.out
+        + read * p.read
+        + c5m * p.in * 1.25
+        + c1h * p.in * 2) / 1e6;
 }
 
 const localDateStr = ms => { const d = new Date(ms); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
