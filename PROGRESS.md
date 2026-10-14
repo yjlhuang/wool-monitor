@@ -44,8 +44,10 @@
    否則通知會重複觸發或永不觸發。
 2. **`limits[]` 的 `is_active: false`** 時 `resets_at` 是漂移佔位值
    （claude.ai 顯示 "Starts when a message is sent"），不能渲染成倒數。
-3. **改計價規則必須把 `WOOL_CACHE_VER` +1**，否則 jsonl 的 mtime/size 沒變會沿用舊價，
-   你會以為改壞了但其實是快取。
+3. **快取存的是 token 數（v4 起），改價格只要改 `WOOL_MODEL_PRICE`，不用升版、不用重掃。**
+   `WOOL_CACHE_VER` 只在「記錄欄位格式」改變時 +1。**不要為了改價格升版**：版本不合會整包丟棄快取，
+   而 Claude Code 預設約 30 天就清掉舊 jsonl，丟掉的紀錄無法從磁碟還原（2026-10-14 已因此遺失 7–9 月紀錄）。
+   已消失的 jsonl 紀錄現在會保留在快取裡，不再被刪除。
 4. **Antigravity 的 token 是 IDE 現產的**，IDE 關掉就失效。`agy.exe` 的命令列是空的，
    拿不到 token；**能問到數字的只有 IDE 那支 `language_server.exe`**。
 5. **PowerShell 腳本含巢狀引號一律走 `-EncodedCommand`**（base64 UTF-16LE）。

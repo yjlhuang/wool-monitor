@@ -855,7 +855,9 @@ function scanCodexContext() {
 // 佛系粗估:只算 Claude Code 本機 log,不含 claude.ai 網頁端;雙帳號的 log 混在同一目錄,一併計入。
 const readline = require('readline');
 const WOOL_CACHE_PATH = path.join(ROOT, 'wool-cache.json');
-const WOOL_CACHE_VER = 3; // 計價規則/快取欄位改版時 +1,強制整包重掃(否則 mtime 沒變的檔會沿用舊價)
+// 快取存的是 token 數,不是美元:改價格只要改下面的價目表,不用重掃 jsonl。
+// 只有「記錄欄位格式」改變時才 +1(會整包重掃)。已消失的 jsonl 紀錄會保留在快取裡,不會被刪掉。
+const WOOL_CACHE_VER = 4;
 // [模型比對, input, output, cache 讀取, 分段價?](USD / 1M tokens,Anthropic 官方價目表)。
 // 寫入:5 分鐘 1.25×、1 小時 2×(所有模型都一樣,由 input 推導)。讀取每個模型不同,直接寫死。
 // 分段價 [門檻 tokens, input, output, cache 讀取]:Haiku 5.5 的 prompt 超過 10 萬 token 時改用高價檔。
@@ -879,7 +881,7 @@ const WOOL_MODEL_PRICE = [
 const WOOL_PRICE_FALLBACK = { in: 5, out: 25, read: 0.5 }; // 認不得的新模型:當 Opus 級估
 const WOOL_RESCAN_MS = 300000; // 增量重掃間隔 5 分鐘
 
-let woolCache = null;   // { v, files: { [路徑]: { mtimeMs, size, msgs: [[messageId, 'YYYY-MM-DD', usd, model], ...] } } }
+let woolCache = null;   // { v, files: { [路徑]: { mtimeMs, size, msgs: [[messageId, 'YYYY-MM-DD', model, in, out, cacheRead, cacheWrite5m, cacheWrite1h], ...] } } }
 let woolScanning = false;
 let woolLastScan = 0;
 
@@ -903,18 +905,10 @@ function woolPrice(model, promptTok) {
   return WOOL_PRICE_FALLBACK;
 }
 
-function woolMsgCost(model, u) {
-  const cc = u.cache_creation;
-  // 有 5m/1h 細分就分開計價;沒有就整包當 5 分鐘 cache(便宜檔,寧可低估不高估)
-  const c1h = cc ? (cc.ephemeral_1h_input_tokens || 0) : 0;
-  const c5m = cc ? (cc.ephemeral_5m_input_tokens || 0) : (u.cache_creation_input_tokens || 0);
-  const read = u.cache_read_input_tokens || 0;
-  const p = woolPrice(model, (u.input_tokens || 0) + read + c5m + c1h);
-  return ((u.input_tokens || 0) * p.in
-        + (u.output_tokens || 0) * p.out
-        + read * p.read
-        + c5m * p.in * 1.25
-        + c1h * p.in * 2) / 1e6;
+// 依 token 數換算美元(價格在查詢時套用,所以改價目表不需要重掃)
+function woolRecordUsd(model, it, ot, rd, c5m, c1h) {
+  const p = woolPrice(model, it + rd + c5m + c1h);
+  return (it * p.in + ot * p.out + rd * p.read + c5m * p.in * 1.25 + c1h * p.in * 2) / 1e6;
 }
 
 const localDateStr = ms => { const d = new Date(ms); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
@@ -932,8 +926,14 @@ async function scanWoolFile(fp) {
     const id = m.id || j.uuid;
     const ts = Date.parse(j.timestamp);
     if (!id || isNaN(ts) || msgs.has(id)) continue;
-    const usd = woolMsgCost(m.model, m.usage);
-    if (usd > 0) msgs.set(id, [id, localDateStr(ts), Math.round(usd * 1e6) / 1e6, m.model]);
+    const u = m.usage;
+    // 有 5m/1h 細分就分開記;沒有就整包當 5 分鐘 cache(便宜檔,寧可低估不高估)
+    const cc = u.cache_creation;
+    const c1h = cc ? (cc.ephemeral_1h_input_tokens || 0) : 0;
+    const c5m = cc ? (cc.ephemeral_5m_input_tokens || 0) : (u.cache_creation_input_tokens || 0);
+    const rec = [id, localDateStr(ts), m.model, u.input_tokens || 0, u.output_tokens || 0,
+                 u.cache_read_input_tokens || 0, c5m, c1h];
+    if (rec.slice(3).some(v => v > 0)) msgs.set(id, rec);
   }
   return [...msgs.values()];
 }
@@ -961,7 +961,8 @@ async function rescanWool() {
         try { cache.files[fp] = { mtimeMs: st.mtimeMs, size: st.size, msgs: await scanWoolFile(fp) }; } catch {}
       }
     }
-    for (const fp of Object.keys(cache.files)) if (!seen.has(fp)) delete cache.files[fp];
+    // 不刪除「已不在磁碟上」的檔:Claude Code 預設約 30 天就清掉舊 jsonl,但之前掃過的花費要留住,
+    // 否則累計金額會隨日誌清理縮水(回本倍率因此失真)。
     try { fs.writeFileSync(WOOL_CACHE_PATH, JSON.stringify(cache)); } catch {}
     woolLastScan = Date.now();
   } finally { woolScanning = false; }
@@ -1003,7 +1004,9 @@ function woolSummary() {
   // 以 message id 全域去重:同一 session 續接/fork 時,舊訊息會被複製到新 jsonl,不去重會重複計費
   const byId = new Map();
   for (const f of Object.values(cache.files)) {
-    for (const [id, date, usd, model] of (f.msgs || [])) byId.set(id, [date, usd, model || 'unknown']);
+    for (const [id, date, model, it, ot, rd, c5m, c1h] of (f.msgs || [])) {
+      byId.set(id, [date, woolRecordUsd(model, it, ot, rd, c5m, c1h), model || 'unknown']);
+    }
   }
   const now = Date.now();
   const cyc = billingCycle(cfg.startDate, now);
