@@ -110,7 +110,8 @@ Remove-Item webview2.zip, webview2_tmp -Recurse
 的程式碼（`server.js` / `index.html` / `floating-widget.ps1` 的整體架構與實作），感謝原作者 🙏。
 原專案截至 fork 時未標示授權條款；本 fork 以致敬與個人自用為目的公開，
 若原作者對此有任何意見，請開 issue，會立即配合處理。
-本 fork 新增的部分（薅羊毛精算、limits[] 解析、通知等）以 MIT 授權釋出。
+本 fork 新增的部分（薅羊毛精算、limits[] 解析、通知等）改以 [PolyForm Noncommercial License 1.0.0](LICENSE)釋出（非商業用途可自由使用與修改）；
+沿用自原專案的程式碼不在此授權範圍內，其權利屬原作者。
 
 **不想讀技術細節?看 [使用指南.md](使用指南.md)（小白流,含每顆按鈕在幹嘛）。**
 進度與待辦見 [PROGRESS.md](PROGRESS.md)（也是給下一個 LLM 的交接文件），
