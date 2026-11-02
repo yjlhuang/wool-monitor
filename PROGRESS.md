@@ -92,7 +92,12 @@
 - **新增 Grok CLI 花費卡**（`server.js` 的 `scanGrok()`、`index.html` 的 `spendMetrics()`，`kind:'spend'`）：
   - 資料來源：`~/.grok/sessions/<cwd>/<sessionId>/usage.json`。`turns[]` 是每回合數字（加總 = session 總計），
     `costUsdTicks` 1 tick = 1e-10 USD（實測 2094000000 = $0.2094，與 CLI `/usage` 吻合），不需價目表。
-  - 顯示本週／本月／累計美元＋token＋呼叫次數、本月模型別小計；**不畫血條**。
+  - 顯示本週／本月／累計美元＋token＋呼叫次數、本月模型別小計，以及 **24 小時滾動用量血條（估算）**。
+  - **免費額度實測（2026-11-02 撞牆）**：429 `subscription:free-usage-exhausted … for model grok-4.7 … rolling 24-hour window …
+    tokens (actual/limit): 675833/600000`。每模型各一份、滾動 24h。xAI 的 actual 算法**對不上**本機 token 欄位的任何
+    組合（暴力搜尋只有巧合）；但前兩回合累計 $0.6335 + 第三回合一部分 ≈ 675833 微美元，量級吻合，所以暫以
+    `GROK_FREE_LIMIT_USD = 0.60`、百分比 = 近 24h 花費 ÷ 0.60 估算（撞牆當下本機算出 118%）。**是估算**，之後若
+    有更多撞牆樣本可校正；付費方案上限不同且偵測不到方案。
   - 週界線 = 週日 00:00 UTC（billing API 的 currentPeriod），月界線 = UTC 每月 1 日。**是推算值**：
     Cursor Overview 頁寫的重置日是 11/4，與之不符，尚未釐清。
   - 純本機掃描（依檔案 mtime 快取），不用憑證、不連網；不走 `cachedFetch`。

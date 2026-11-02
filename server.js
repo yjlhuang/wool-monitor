@@ -392,6 +392,7 @@ async function fetchCodex() {
 // 所以不需要價目表。turns[] 是「每回合」數字(各回合加總 = session 總計)。
 // xAI 沒提供可讀的「已用 %」來源,所以這裡只給花費/token 計數(kind:'spend'),不畫血條。
 const GROK_TICK_USD = 1e-10;
+const GROK_FREE_LIMIT_USD = 0.60; // 免費方案每模型每 24 小時上限(估算,見 scanGrok 內說明)
 const grokFileCache = new Map(); // 檔案路徑 -> { mtimeMs, size, recs }
 function grokParseUsageFile(file) {
   const j = readJsonSafe(file);
@@ -452,8 +453,28 @@ function scanGrok() {
     m.usd += r.usd; m.tokens += r.tokens;
   }
   const lastAt = all.reduce((a, r) => Math.max(a, r.at), 0);
+  // 免費額度(估算):2026-11-02 撞牆時 429 訊息寫「每模型、滾動 24 小時、tokens (actual/limit): 675833/600000」。
+  // xAI 的 actual 算法對不上本機任何 token 欄位組合;但「前兩回合累計 $0.6335 + 第三回合一部分 ≈ 675833 微美元」
+  // 量級吻合,故概略以「近 24 小時花費 ÷ $0.60」當百分比。這是估算,不是官方數字;付費方案上限不同、也偵測不到方案。
+  const rollStart = now.getTime() - 86400000;
+  const rollBy = {};
+  for (const r of all) {
+    if (r.at < rollStart) continue;
+    const m = rollBy[r.model] || (rollBy[r.model] = { model: r.model, usd: 0, oldest: r.at });
+    m.usd += r.usd; m.oldest = Math.min(m.oldest, r.at);
+  }
+  const rollModels = Object.values(rollBy).map(m => ({ model: m.model, usd: m.usd, pct: m.usd / GROK_FREE_LIMIT_USD * 100, oldest: m.oldest }))
+    .sort((a, b) => b.pct - a.pct);
+  const top = rollModels[0] || null;
   return {
     ok: true, kind: 'spend', sessions,
+    rolling: {
+      limitUsd: GROK_FREE_LIMIT_USD,
+      pct: top ? top.pct : 0, topModel: top ? top.model : null,
+      // 滾動視窗:最舊那筆滿 24 小時後,它的花費開始釋出
+      resetsAt: top ? new Date(top.oldest + 86400000).toISOString() : null,
+      models: rollModels.map(m => ({ model: m.model, usd: m.usd, pct: m.pct })),
+    },
     week: { ...sum(weekStart), start: new Date(weekStart).toISOString(), end: new Date(weekStart + 7 * 86400000).toISOString() },
     month: sum(monthStart),
     total: sum(0),
