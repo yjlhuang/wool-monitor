@@ -40,6 +40,7 @@ const SERR = {
     KIRO_FORMAT_UNEXPECTED: 'kiro-cli /usage 回應格式不符預期',
     ANTIGRAVITY_NOT_RUNNING: '未偵測到執行中的 Antigravity;請打開 Antigravity IDE(或在終端機跑 agy)並保持開啟',
     ANTIGRAVITY_PROBE_FAILED: '偵測到 Antigravity 執行中,但查詢用量失敗(可能是 CSRF token 拿不到,或回應格式改了)',
+    NO_GROK_DATA: '找不到 Grok CLI 的本機紀錄 (~/.grok/sessions);裝好並跑過一次 grok 就會出現',
     STALE_BACKOFF: '退避中(避免觸發限流),沿用舊資料',
     UNEXPECTED_EXCEPTION: '發生非預期錯誤: {msg}',
   },
@@ -65,6 +66,7 @@ const SERR = {
     KIRO_FORMAT_UNEXPECTED: 'kiro-cli /usage response did not match expectations',
     ANTIGRAVITY_NOT_RUNNING: 'No running Antigravity detected — open the Antigravity IDE (or run `agy` in a terminal) and keep it open',
     ANTIGRAVITY_PROBE_FAILED: 'Antigravity is running, but fetching usage failed (CSRF token unavailable, or the response shape changed)',
+    NO_GROK_DATA: 'Grok CLI local records not found (~/.grok/sessions) — install it and run grok once',
     STALE_BACKOFF: 'Backing off to avoid rate limits — using cached data',
     UNEXPECTED_EXCEPTION: 'Unexpected error: {msg}',
   },
@@ -383,6 +385,81 @@ async function fetchCodex() {
     lastErr = { errCode: 'CODEX_FORMAT_UNEXPECTED' };
   }
   return { ok: false, ...(lastErr || { errCode: 'UNKNOWN_ERROR' }) };
+}
+
+// ---------- Grok CLI(xAI):純本機,讀 ~/.grok/sessions/<cwd>/<sessionId>/usage.json ----------
+// costUsdTicks:1 tick = 1e-10 USD(2026-11-02 實測:2094000000 ticks = $0.2094,與 CLI /usage 吻合),
+// 所以不需要價目表。turns[] 是「每回合」數字(各回合加總 = session 總計)。
+// xAI 沒提供可讀的「已用 %」來源,所以這裡只給花費/token 計數(kind:'spend'),不畫血條。
+const GROK_TICK_USD = 1e-10;
+const grokFileCache = new Map(); // 檔案路徑 -> { mtimeMs, size, recs }
+function grokParseUsageFile(file) {
+  const j = readJsonSafe(file);
+  if (!j || !j.session) return [];
+  const recs = [];
+  const push = (at, mu, fallbackModel) => {
+    const models = mu && Object.keys(mu).length ? mu : { [fallbackModel || 'unknown']: null };
+    for (const [model, u] of Object.entries(models)) {
+      if (!u) continue;
+      recs.push({ at, model, usd: (u.costUsdTicks || 0) * GROK_TICK_USD,
+        tokens: u.totalTokens || 0, cached: u.cachedReadTokens || 0, calls: u.modelCalls || 0 });
+    }
+  };
+  if (Array.isArray(j.turns) && j.turns.length) {
+    for (const t of j.turns) push(Date.parse(t.endedAt) || 0, t.modelUsage, t.primaryModelId);
+  } else {
+    push(Date.parse(j.updatedAt) || 0, j.session.modelUsage, j.session.primaryModelId);
+  }
+  return recs;
+}
+function scanGrok() {
+  const root = path.join(os.homedir(), '.grok', 'sessions');
+  let cwdDirs;
+  try { cwdDirs = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory()); }
+  catch { return { ok: false, errCode: 'NO_GROK_DATA' }; }
+  const all = [];
+  let sessions = 0;
+  for (const cd of cwdDirs) {
+    let subs = [];
+    try { subs = fs.readdirSync(path.join(root, cd.name), { withFileTypes: true }).filter(d => d.isDirectory()); } catch { continue; }
+    for (const sd of subs) {
+      const f = path.join(root, cd.name, sd.name, 'usage.json');
+      let st; try { st = fs.statSync(f); } catch { continue; }
+      let c = grokFileCache.get(f);
+      if (!c || c.mtimeMs !== st.mtimeMs || c.size !== st.size) {
+        c = { mtimeMs: st.mtimeMs, size: st.size, recs: grokParseUsageFile(f) };
+        grokFileCache.set(f, c);
+      }
+      sessions++;
+      for (const r of c.recs) all.push(r);
+    }
+  }
+  if (!sessions) return { ok: false, errCode: 'NO_GROK_DATA' };
+  // 週界線:xAI 帳單週期為每週,週日 00:00 UTC 起算(billing API 的 currentPeriod 實測);月界線:UTC 每月 1 日
+  const now = new Date();
+  const dayStartUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const weekStart = dayStartUtc - now.getUTCDay() * 86400000;
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const sum = since => {
+    const o = { usd: 0, tokens: 0, calls: 0 };
+    for (const r of all) if (r.at >= since) { o.usd += r.usd; o.tokens += r.tokens; o.calls += r.calls; }
+    return o;
+  };
+  const byModel = {};
+  for (const r of all) {
+    if (r.at < monthStart) continue;
+    const m = byModel[r.model] || (byModel[r.model] = { model: r.model, usd: 0, tokens: 0 });
+    m.usd += r.usd; m.tokens += r.tokens;
+  }
+  const lastAt = all.reduce((a, r) => Math.max(a, r.at), 0);
+  return {
+    ok: true, kind: 'spend', sessions,
+    week: { ...sum(weekStart), start: new Date(weekStart).toISOString(), end: new Date(weekStart + 7 * 86400000).toISOString() },
+    month: sum(monthStart),
+    total: sum(0),
+    models: Object.values(byModel).sort((a, b) => b.usd - a.usd),
+    lastAt: lastAt ? new Date(lastAt).toISOString() : null,
+  };
 }
 
 // ---------- MiniMax (Token/Coding Plan remains 端點,需在 config.json 填 API Key) ----------
@@ -1141,12 +1218,15 @@ const server = http.createServer(async (req, res) => {
     const minimax = localizeResult(minimaxRaw, lang);
     const kiro = localizeResult(kiroRaw, lang);
     const antigravity = localizeResult(antigravityRaw, lang);
+    let grokRaw; // 純本機檔案掃描(有 mtime 快取),便宜,不走 cachedFetch
+    try { grokRaw = scanGrok(); } catch (e) { grokRaw = { ok: false, errCode: 'UNEXPECTED_EXCEPTION', errParams: { msg: String(e && e.message || e) } }; }
+    const grok = localizeResult(grokRaw, lang);
     checkClaudeAlerts(claudeRaw); // 撞牆預警(快取結果也檢查;同一重置週期只通知一次)
     // Context 掃描是本機檔案操作,便宜,每次請求即時計算(不論配額查詢成敗)
     try { claude.context = scanClaudeContext(); } catch { claude.context = []; }
     try { codex.context = scanCodexContext(); } catch { codex.context = []; }
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ time: new Date().toISOString(), providers: { claude, codex, minimax, kiro, antigravity } }));
+    res.end(JSON.stringify({ time: new Date().toISOString(), providers: { claude, codex, minimax, kiro, antigravity, grok } }));
     return;
   }
 

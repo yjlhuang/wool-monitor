@@ -94,6 +94,7 @@
     white-space: nowrap; overflow: hidden;
   }
   .src { color: #475a7d; font-size: 10px; }
+  .spend-val { font-size: 20px; font-weight: 700; color: var(--text); letter-spacing: .5px; line-height: 24px; }
   .sub { font-size: 11px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* ---------- 血條 ---------- */
@@ -419,7 +420,7 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
 <header>
   <h1><span data-i18n="pageTitle">AI 使用量儀表板</span> <span class="pix">▮▮▮▯▯</span></h1>
   <span id="status"><span class="dot" id="statusDot"></span><span id="statusText" data-i18n="statusConnecting">連線中…</span></span>
-  <span id="verTag">wool-v0.9</span>
+  <span id="verTag">wool-v0.10</span>
   <span class="spacer"></span>
   <button id="langToggle" type="button"></button>
   <button id="addBtn" class="primary" data-i18n="addProviderBtn">＋ 新增提供商</button>
@@ -603,6 +604,13 @@ const I18N = {
     woolSaved: '🐑 薅羊毛設定已儲存',
     woolSaveFailed: '儲存失敗:{err}',
     minorTitle: '📦 其他提供商',
+    grokWeekLabel: '本週花費',
+    grokMonthLabel: '本月花費',
+    grokTotalLabel: '累計花費',
+    grokModelsLabel: '本月模型別',
+    grokWeekSub: '{date} 起算 · {tok} · {calls} 次',
+    grokSub: '{tok} · {calls} 次',
+    grokNote: '只計本機花費:xAI 沒提供可讀的「已用 %」,所以不畫血條',
   },
   en: {
     pageTitle: 'AI Usage Dashboard',
@@ -707,6 +715,13 @@ const I18N = {
     woolSaved: '🐑 Wool settings saved',
     woolSaveFailed: 'Save failed: {err}',
     minorTitle: '📦 Other Providers',
+    grokWeekLabel: 'This Week',
+    grokMonthLabel: 'This Month',
+    grokTotalLabel: 'All Time',
+    grokModelsLabel: 'Models (month)',
+    grokWeekSub: 'since {date} · {tok} · {calls} calls',
+    grokSub: '{tok} · {calls} calls',
+    grokNote: 'Local spend only: xAI exposes no readable "% used", so no bar is drawn',
   },
 };
 const WEEKDAYS_I18N = {
@@ -757,6 +772,7 @@ const BUILTINS = [
   ['minimax', 'MiniMax', true],
   ['kiro', 'Kiro', true],
   ['antigravity', 'Antigravity', true],
+  ['grok', 'Grok', true],   // 純花費計數卡(kind:'spend'),沒有 % 血條
 ];
 let autoData = {};          // /api/usage 回傳的自動資料(不落地)
 let online = false;
@@ -929,6 +945,32 @@ function hpCell(label, usedPct, src) {
       <div class="sub">${has ? t('usedPct', { pct: used.toFixed(1) }) : t('editHintPlaceholder')}</div>
     </div>`;
 }
+// ---- 花費計數卡(Grok):上游沒有「已用 %」,只有本機 usage.json 的美元與 token ----
+const fmtUsd = v => '$' + (v < 10 ? v.toFixed(3) : v.toFixed(2));
+const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+function spendOf(p) {
+  const a = p.autoKey ? autoData[p.autoKey] : null;
+  return (a && a.ok && a.kind === 'spend') ? a : null;
+}
+function spendCell(label, value, sub) {
+  return `
+    <div class="metric">
+      <div class="metric-label"><span>${label}</span><span class="src">${srcLabel('auto')}</span></div>
+      <div class="spend-val">${value}</div>
+      <div class="sub" title="${escapeHtml(sub)}">${escapeHtml(sub)}</div>
+    </div>`;
+}
+function spendMetrics(s) {
+  const sub = o => t('grokSub', { tok: fmtTok(o.tokens), calls: o.calls });
+  const wd = new Date(s.week.start);
+  const models = s.models.length
+    ? s.models.map(m => `${escapeHtml(m.model)} ${fmtUsd(m.usd)}`).join(' · ')
+    : '—';
+  return spendCell(t('grokWeekLabel'), fmtUsd(s.week.usd), t('grokWeekSub', { date: (wd.getMonth() + 1) + '/' + wd.getDate(), tok: fmtTok(s.week.tokens), calls: s.week.calls }))
+    + spendCell(t('grokMonthLabel'), fmtUsd(s.month.usd), sub(s.month))
+    + spendCell(t('grokTotalLabel'), fmtUsd(s.total.usd), sub(s.total))
+    + `<div class="metric"><div class="metric-label"><span>${t('grokModelsLabel')}</span></div><div class="sub" style="white-space:normal">${models}</div><div class="sub" style="white-space:normal">${t('grokNote')}</div></div>`;
+}
 function ctxCell(ctx) {
   if (!ctx) {
     return `
@@ -1025,6 +1067,12 @@ function renderMini() {
   if (miniIndex >= state.providers.length) miniIndex = 0;
   const p = state.providers[miniIndex];
   const e = effective(p);
+  const sp = spendOf(p);
+  if (sp) { // 花費卡沒有血條:迷你模式只顯示本週花費
+    box.innerHTML = `<span class="mini-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+      <div class="bar"><span class="bar-text">${t('grokWeekLabel')} ${fmtUsd(sp.week.usd)}</span></div>`;
+    return;
+  }
   const has = e.sess.usedPct != null && isFinite(e.sess.usedPct);
   const used = has ? Math.min(100, Math.max(0, e.sess.usedPct)) : 0;
   const remain = 100 - used;
@@ -1076,6 +1124,7 @@ function renderAll() {
         </div>
       </div>
       <div class="metrics">
+        ${spendOf(p) ? spendMetrics(spendOf(p)) : `
         ${e.sess.unsupported ? '' : hpCell(t('labelCurrentUsage'), e.sess.usedPct, e.sess.src)}
         ${e.sess.unsupported ? '' : cdCell(t('labelNextRespawn'), e.sess.resetsAt, e.sess.windowMin, e.sess.src, p.id, 'session', e.sess.inactive)}
         ${e.ctxUnsupported ? '' : ctxCell(e.ctx)}
@@ -1086,7 +1135,7 @@ function renderAll() {
           const weekly = x.windowMin === 10080;
           return hpCell(weekly ? t('extraWeeklyUsage', { label: lbl }) : t('usageOfLabel', { label: lbl }), x.usedPct, 'auto')
                + cdCell(weekly ? t('extraWeeklyRespawn', { label: lbl }) : t('respawnOfLabel', { label: lbl }), x.resetsAt, x.windowMin, 'auto', p.id, 'extra' + i, x.inactive);
-        }).join('')}
+        }).join('')}`}
       </div>
     </section>`;
   };

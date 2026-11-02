@@ -5,7 +5,7 @@
 > Fork 自 [danleetw/ai_usage_dashboard](https://github.com/danleetw/ai_usage_dashboard)，
 > 原作是通用的多提供商 AI 用量儀表板（電玩血條風格），本 fork 改造成「Claude 為主」的版本：
 > 一眼看 Session / Weekly 血條，加上一張佛系的「訂閱月費回本倍率」估算表。
-> 另可同時盯 Codex 與 Antigravity 的配額。
+> 另可同時盯 Codex 與 Antigravity 的配額，並統計 Grok CLI 的本機花費。
 > 錢都花下去了，當然要薅好薅滿——客家美學。🐑
 
 ## 功能（相對原作的差異）
@@ -35,6 +35,11 @@
   **後者跟你自己的 Claude Pro 訂閱無關，也不會被薅羊毛表重複計算**
   （那張表只掃本機 Claude Code 的 jsonl）。
   Antigravity 只有週配額，沒有 session 級或 context 資料，那幾格直接不顯示。
+- **Grok CLI（xAI）花費卡**：純本機，讀 `~/.grok/sessions/*/*/usage.json`
+  （`costUsdTicks`，1 tick = 1e-10 美元，不需價目表），顯示本週／本月／累計的美元與 token、
+  本月模型別小計。**沒有 % 血條**——xAI 沒有可讀的「已用 %」來源（Grok 帳號與 Cursor 共用額度池，
+  網頁端在 cursor.com/dashboard，無對外 API）。週界線以週日 00:00 UTC 推算，與官方週期可能差幾天。
+  不使用任何登入憑證、不連網。
 - **版面精簡**：Claude 置頂常駐；其餘提供商收進「📦 其他提供商」區
   （**預設展開**，手動收起會被記住；浮窗模式一律不顯示）；
   MiniMax / Kiro 預設移除（可從「＋ 新增提供商」加回）。

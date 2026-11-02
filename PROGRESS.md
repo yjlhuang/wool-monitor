@@ -16,7 +16,7 @@
 
 ## 📌 一句話定位
 
-**本機執行的 AI 用量儀表板**：盯 Claude / Codex / Antigravity 的配額血條，
+**本機執行的 AI 用量儀表板**：盯 Claude / Codex / Antigravity 的配額血條（另有 Grok CLI 的本機花費計數卡），
 外加一張「訂閱月費回本倍率」的佛系估算表（🐑 薅羊毛）。
 
 技術形態：
@@ -26,16 +26,17 @@
 - **沒有部署**。純本機，`node server.js` 只綁 `127.0.0.1:3789`。**不要找 Vercel/線上版，沒有這種東西。**
 - 桌面浮窗是 WPF + WebView2（`floating-widget.ps1`），載入同一個頁面的 `?widget=1`。
 
-## 📸 狀態快照（2026-09-17）
+## 📸 狀態快照（2026-11-02）
 
 | 項目 | 值 |
 |---|---|
-| 工作目錄版本 | **wool-v0.9**（`index.html` 的 `#verTag`） |
-| 最新 commit | 見 `git log -1`（v0.9 發版 commit） |
+| 工作目錄版本 | **wool-v0.10**（`index.html` 的 `#verTag`） |
+| 最新 commit | 見 `git log -1`（v0.10 發版 commit） |
 | 未提交檔案 | 無（發版時一併 commit） |
-| Claude 自動同步 | 🔴 **失敗中** — 本機憑證 2026-09-16 23:13 過期（見待辦 1） |
+| Claude 自動同步 | 🟢 正常（2026-11-02 實測頁面顯示自動同步；09-16 的憑證過期事件已過，見待辦 1 的歷史說明） |
 | Codex 自動同步 | 🟢 正常 |
-| Antigravity 自動同步 | 🟢 正常（前提：IDE 開著） |
+| Antigravity 自動同步 | 🟡 2026-11-02 顯示「未偵測到執行中的 Antigravity」（IDE 沒開，屬預期） |
+| Grok 花費卡 | 🟢 正常（純本機 `~/.grok/sessions`） |
 | MiniMax / Kiro | 預設已移除，可從「＋新增提供商」加回 |
 
 ## 💣 地雷區（這個專案特有，踩過才知道）
@@ -86,7 +87,25 @@
 
 # 版本沿革
 
-## 目前版本:wool-v0.9(2026-10-14)
+## 目前版本:wool-v0.10(2026-11-02)
+
+- **新增 Grok CLI 花費卡**（`server.js` 的 `scanGrok()`、`index.html` 的 `spendMetrics()`，`kind:'spend'`）：
+  - 資料來源：`~/.grok/sessions/<cwd>/<sessionId>/usage.json`。`turns[]` 是每回合數字（加總 = session 總計），
+    `costUsdTicks` 1 tick = 1e-10 USD（實測 2094000000 = $0.2094，與 CLI `/usage` 吻合），不需價目表。
+  - 顯示本週／本月／累計美元＋token＋呼叫次數、本月模型別小計；**不畫血條**。
+  - 週界線 = 週日 00:00 UTC（billing API 的 currentPeriod），月界線 = UTC 每月 1 日。**是推算值**：
+    Cursor Overview 頁寫的重置日是 11/4，與之不符，尚未釐清。
+  - 純本機掃描（依檔案 mtime 快取），不用憑證、不連網；不走 `cachedFetch`。
+- **Grok 帳號層級資訊的調查結論**（沒做進程式，留給以後）：
+  - Grok CLI 帳號與 Cursor 同屬一個 unified 帳號，共用額度池；`grok.com/dashboard` 會導向 `cursor.com/unify/upgrade`，
+    用量頁在 `cursor.com/dashboard`（Overview 的 "included usage"）。網頁端 API `get-sand-usage-status`（"sand" 應為
+    Grok Build 內部代號）靠瀏覽器 cookie，沒有合理的本機取法，也未能讀到回應內容。
+  - CLI 自己打的 `cli-chat-proxy.grok.com/v1/billing`（Bearer = `~/.grok/auth.json` 的 `key`，約 4 小時過期；
+    **別用 refresh_token 去換**，會 rotate 弄壞 CLI 登入）只回計費週期與 on-demand／prepaid，**沒有已用 %**。
+- 驗證：`/api/usage` 的 `providers.grok` 數字與本機 usage.json 一致（$0.6335、951,278 tokens）；
+  瀏覽器完整版實際渲染確認。**英文介面與「無 ~/.grok」錯誤提示未實測。**
+
+## 前一版:wool-v0.9(2026-10-14)
 
 - **薅羊毛計價改依官方價目表**（commit `27d5e07`）：
   - cache 讀取價每個模型各自計價（Fable 5.1 $0.25、Opus 5.5 $0.20、Sonnet 5.5 $0.10、Haiku 5.5 $0.01）。
